@@ -880,6 +880,7 @@ def main(argv):
         '-in <input-filename>\n'
         '-out <output-filename>\n'
         '-outform <output-format>: Any of der, pem, der2, pem2, msblob, dropbear, hexa.\n'
+        '-inform <input-format>; Ignored. Autodetected instead.\n'
         .replace('%s', argv[0]))
     sys.exit(1)
   i = 1
@@ -895,7 +896,7 @@ def main(argv):
     if arg == '-dump':
       format = 'dict'
       continue
-    if arg not in ('-in', '-out', '-outform'):
+    if arg not in ('-in', '-out', '-outform', '-inform'):
       sys.stderr.write('fatal: unknown flag (use --help): %s\n' % arg)
       sys.exit(1)
     if i == len(argv):
@@ -911,7 +912,9 @@ def main(argv):
       if value == 'dict':
         sys.stderr.write('fatal: -outform dict not supported on the command-line\n')
         sys.exit(1)
-      format = value
+      format = value.lower()
+    # FYI `-inform ...' is silently ignored, because rsakeytool.py
+    # autodetects the input file format.
   if infn is None:
     sys.stderr.write('fatal: missing -in ...\n')
     sys.exit(1)
