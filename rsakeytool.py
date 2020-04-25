@@ -239,23 +239,7 @@ def dropbear_value(value):
 # --- RSA calculations.
 
 
-# !! Is this faster?
-#def egcd(a, b):
-#    if a == 0:
-#        return (b, 0, 1)
-#    else:
-#        g, y, x = egcd(b % a, a)
-#        return (g, x - (b // a) * y, y)
-#
-#def modinv(a, m):
-#    gcd, x, y = egcd(a, m)
-#    if gcd != 1:
-#        return None  # modular inverse does not exist
-#    else:
-#        return x % m
-
-
-def modinv(a, b):
+def modinv(a, b, _divmod=divmod):
   """Returns the modular inverse of a, modulo b. b must be positive.
 
   If gcd(a, b) != 1, then no modular inverse exists, and ValueError is raised.
@@ -278,7 +262,8 @@ def modinv(a, b):
   while a > 1:
     if not b:
       raise ValueError('No modular inverse, not coprime: ' + repr((a0, b0)))
-    x0, x1, a, b = x1 - a // b * x0, x0, b, a % b
+    r, q = _divmod(a, b)
+    x0, x1, a, b = x1 - r * x0, x0, b, q
   return x1 + (x1 < 0 and b0)
 
 
