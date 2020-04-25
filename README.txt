@@ -18,6 +18,9 @@ Missing features:
 
 * Reading or writing encrypted (password-protected) RSA private key files.
 * Reading or writing public-key cryptography key files other than RSA.
+* Reading or writing RSA public key formats (with the private key fields).
+* Reading, writing or verifying X.509 certificates (cert.pem, *.csr,
+  `openssl x509') and certificate requests.
 * Many command-line flags `openssl rsa ...'.
 
 rsakeytool.py works with any version of Python >= 2.4. It has been
