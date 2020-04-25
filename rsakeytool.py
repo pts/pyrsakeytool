@@ -130,6 +130,47 @@ def der_value(value, _bb50=bb('\5\0')):
     raise TypeError('Bad DER data type: %s' % type(value))
 
 
+def parse_der_header(data, i, xtype, stype):
+  if len(data) < i + 2:
+    raise ValueError('EOF in der %s header.' % stype)
+  b, size = struct.unpack('>BB', data[i : i + 2])
+  if b != xtype:
+    raise ValueError('Expected der %s.' % stype)
+  i += 2
+  if size < 0x80:
+    return i, size
+  elif size == 0x80:
+    return i, len(data) - i
+  elif size == 0xff:
+    raise ValueError('Bad size.')
+  j, size = i + (size & 0x7f), 0
+  while i != j:
+    if len(data) <= i:
+      raise ValueError('EOF in der %s size.' % stype)
+    size = size << 8 | struct.unpack('>B', data[i : i + 1])[0]
+    i += 1
+  return i, size
+
+
+def parse_der_sequence_header(data, i):
+  return parse_der_header(data, i, xtype=0x30, stype='sequence')
+
+
+def parse_der_bytes_header(data, i):
+  return parse_der_header(data, i, xtype=4, stype='bytes')
+
+
+def parse_der_zero(data, i, _bb210=bb('\2\1\0')):
+  if len(data) < i + 3:
+    raise ValueError('EOF in der zero.')
+  if data[i : i + 3] != _bb210:
+    assert 0, [data[:10], data[i : i + 10]]
+    raise ValueError('Expected der zero.')
+  return i + 3
+
+
+
+
 def base64_encode(data, _bbnl=bbnl):
   data = binascii.b2a_base64(data).rstrip(_bbnl)
   if not isinstance(data, bytes):
@@ -421,13 +462,26 @@ def get_rsa_der(d):
 
 
 OID_RSA_ENCRYPTION = '1.2.840.113549.1.1.1'  # rsaEncryption.
+DER_OID_RSA_ENCRYPTION = der_oid(OID_RSA_ENCRYPTION)
+DER2_RSA_SEQUENCE_DATA = DER_OID_RSA_ENCRYPTION + der_value(None)
 
 
-def convert_rsa_data(d, format='pem', effort=None, _bbe=bbe, _bb30=bb('\x30'), _bbd=bb('-')):
+def convert_rsa_data(d, format='pem', effort=None, _bbe=bbe, _bb30=bb('\x30'), _bbd=bb('-'), _bb50=bb('\5\0')):
   if isinstance(d, bytes):
     data = d
     if data.startswith(_bb30):
-      pass  # !! Remove der2 header.
+      i = 0
+      i, size = parse_der_sequence_header(data, i)
+      i = parse_der_zero(data, i)
+      if data[i : i + 1] == _bb30:
+        i, size = parse_der_sequence_header(data, i)
+        if data[i : i + size] != DER2_RSA_SEQUENCE_DATA:
+          raise ValueError('Unsupported der2 sequence.')
+        i += size
+        i, size = parse_der_bytes_header(data, i)
+        if len(data) < i + size:
+          raise ValueError('EOF in der2 bytes.')
+        data = data[i : i + size]
     elif data.startswith(_bbd) or data[:1].isspace():
       raise ValueError('pem input not supported.')  # TODO(pts): Add support.
     else:
@@ -442,7 +496,7 @@ def convert_rsa_data(d, format='pem', effort=None, _bbe=bbe, _bb30=bb('\x30'), _
     return data
   if format == 'pem':
     return _bbe.join((bb('-----BEGIN RSA PRIVATE KEY-----\n'), base64_encode(data), bb('\n-----END RSA PRIVATE KEY-----\n')))
-  data = der_value((0, (der_oid(OID_RSA_ENCRYPTION), None), der_bytes(data)))
+  data = der_value((0, (DER_OID_RSA_ENCRYPTION, None), der_bytes(data)))
   if format == 'der2':
     return data
   if format == 'pem2':
@@ -464,8 +518,9 @@ der2 = convert_rsa_data(d, 'der2')
 pem2 = convert_rsa_data(d, 'pem2')
 assert convert_rsa_data(der, 'der') == der
 #!!assert convert_rsa_data(pem, 'der') == der
-#!!assert convert_rsa_data(der2, 'der') == der
+assert convert_rsa_data(der2, 'der') == der
 #!!assert convert_rsa_data(pem2, 'der') == der
+#!!parse der to d.
 
 open('t.der', 'wb').write(der)
 open('t.pem', 'wb').write(pem)
