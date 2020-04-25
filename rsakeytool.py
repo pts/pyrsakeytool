@@ -43,7 +43,7 @@ bbe = bb('')
 bbnl = bb('\n')
 
 
-def uint_to_any_msb(value, is_low=False,
+def uint_to_any_be(value, is_low=False,
                     _bbz=bb('\0'), _bb0=bb('0'), _bb8=bb('8'), _bb00=bb('00'), _bbpx=bb('%x')):
   if value < 0:
     raise ValueError('Bad negative uint.')
@@ -59,6 +59,14 @@ def uint_to_any_msb(value, is_low=False,
     elif is_low and not _bb0 <= value[:1] < _bb8:
       value = _bb00 + value
     return binascii.unhexlify(value)
+
+
+if getattr(int, 'from_bytes', None):
+  def uint_from_be(v, _from_bytes=int.from_bytes):  # Python >=3.2. Not in six.
+    return _from_bytes(v, 'big')
+else:
+  def uint_from_be(data, _hexlify=binascii.hexlify):  # Not in six.
+    return int(_hexlify(data), 16)
 
 
 def der_field(xtype, args, _bbe=bbe):
@@ -78,7 +86,7 @@ def der_field(xtype, args, _bbe=bbe):
   elif size >> (0x7e << 3):
     raise ValueError('DER field too long.')
   else:
-    output[1] = uint_to_any_msb(size)
+    output[1] = uint_to_any_be(size)
     output[0] = struct.pack('>BB', xtype, 0x80 | len(output[1]))
   return _bbe.join(output)
 
@@ -119,7 +127,7 @@ def der_bytes(value):
 
 def der_value(value, _bb50=bb('\5\0')):
   if isinstance(value, (int, long)):
-    return der_field(2, uint_to_any_msb(value, is_low=True),)
+    return der_field(2, uint_to_any_be(value, is_low=True),)
   elif isinstance(value, tuple):
     return der_field(0x30, map(der_value, value))
   elif isinstance(value, bytes):
@@ -135,14 +143,17 @@ def parse_der_header(data, i, xtype, stype):
     raise ValueError('EOF in der %s header.' % stype)
   b, size = struct.unpack('>BB', data[i : i + 2])
   if b != xtype:
+    print [data[i : i + 10]]
     raise ValueError('Expected der %s.' % stype)
   i += 2
   if size < 0x80:
     return i, size
   elif size == 0x80:
-    return i, len(data) - i
+    # We may want to apply size limit instead:
+    # return i, len(data) - i
+    raise ValueError('Unlimited der %s size.' % stype)
   elif size == 0xff:
-    raise ValueError('Bad size.')
+    raise ValueError('Bad der %s size.' % stype)
   j, size = i + (size & 0x7f), 0
   while i != j:
     if len(data) <= i:
@@ -169,6 +180,17 @@ def parse_der_zero(data, i, _bb210=bb('\2\1\0')):
   return i + 3
 
 
+def parse_der_uint(data, i, j=None):
+  i, size = parse_der_header(data, i, xtype=2, stype='int')
+  if j is not None and j < i + size:
+    raise ValueError('EOF in size-limited der uint.')
+  if size == 0:
+    raise ValueError('Empty der uint.')
+  if len(data) < i + size:
+    raise ValueError('EOF in der uint.')
+  if struct.unpack('>B', data[i : i + 1])[0] >= 0x80:
+    raise ValueError('Negative der uint.')
+  return i + size, uint_from_be(data[i : i + size])
 
 
 def base64_encode(data, _bbnl=bbnl):
@@ -456,9 +478,48 @@ def get_rsa_der(d):
   return der_value((0, d['modulus'], d['public_exponent'], d['private_exponent'], d['prime1'], d['prime2'], d['exponent1'], d['exponent2'], d['coefficient']))
 
 
+def parse_rsa_der_numbers(data, i=0, j=None):
+  if j is None:
+    j = len(data)
+  d = {}
+  i, d['modulus'] = parse_der_uint(data, i, j)
+  i, d['public_exponent'] = parse_der_uint(data, i, j)
+  i, d['private_exponent'] = parse_der_uint(data, i, j)
+  if i < j:
+    i, d['prime1'] = parse_der_uint(data, i, j)
+    # Stop parsing here, we can calculate the rest.
+  return d
+
+
 OID_RSA_ENCRYPTION = '1.2.840.113549.1.1.1'  # rsaEncryption.
 DER_OID_RSA_ENCRYPTION = der_oid(OID_RSA_ENCRYPTION)
 DER2_RSA_SEQUENCE_DATA = DER_OID_RSA_ENCRYPTION + der_value(None)
+
+
+def parse_rsa_der_header(data, i=0, _bb30=bb('\x30')):
+  if data[i : i + 1] != _bb30:
+    raise ValueError('Expected der or pem input.')
+  i0 = i
+  i, size = parse_der_sequence_header(data, i)
+  j = i + size
+  i = parse_der_zero(data, i)
+  if data[i : i + 1] == _bb30:  # der2.
+    i, size = parse_der_sequence_header(data, i)
+    if data[i : i + size] != DER2_RSA_SEQUENCE_DATA:
+      raise ValueError('Unsupported der2 sequence.')
+    i += size
+    i, size = parse_der_bytes_header(data, i)
+    if len(data) < i + size:
+      raise ValueError('EOF in der2 bytes.')
+    j = i + size
+    i0 = i
+    i, size = parse_der_sequence_header(data, i)
+    if i > j:
+      raise ValueError('der2 too long.')
+    i = parse_der_zero(data, i)
+    if i > j:
+      raise ValueError('der2 too long.')
+  return i, j, i0
 
 
 def convert_rsa_data(d, format='pem', effort=None,
@@ -496,25 +557,16 @@ def convert_rsa_data(d, format='pem', effort=None,
         raise ValueError('Encrypted RSA private key not supported.')
       # TODO(pts): Check for disallowed characters (e.g. ~) in data.
       data = binascii.a2b_base64(data)
-    if not data.startswith(_bb30):
-      raise ValueError('Expected der or pem input.')
-    i = 0
-    i, size = parse_der_sequence_header(data, i)
-    i = parse_der_zero(data, i)
-    if data[i : i + 1] == _bb30:
-      i, size = parse_der_sequence_header(data, i)
-      if data[i : i + size] != DER2_RSA_SEQUENCE_DATA:
-        raise ValueError('Unsupported der2 sequence.')
-      i += size
-      i, size = parse_der_bytes_header(data, i)
-      if len(data) < i + size:
-        raise ValueError('EOF in der2 bytes.')
-      data = data[i : i + size]
-  elif isinstance(d, dict):
+    i, j, i0 = parse_rsa_der_header(data)
+    if effort is None or effort >= 2:
+      d = parse_rsa_der_numbers(data, i, j)
+    else:
+      d, data = None, data[i0 : j]
+  if isinstance(d, dict):
     if not is_rsa_private_key_complete(d, effort):
       d = get_rsa_private_key(**d)
-    data = get_rsa_der(d)
-  else:
+    d, data = None, get_rsa_der(d)
+  if not (isinstance(data, bytes) and d is None):
     raise TypeError
   if format == 'der':
     return data
