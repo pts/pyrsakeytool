@@ -381,8 +381,10 @@ def get_rsa_private_key(**kwargs):
         raise ValueError('Bad public_exponent.')
       if modulus <  2 * 3:
         raise ValueError('Bad modulus.')
-      if private_exponent * public_exponent >= modulus:
-        raise ValueError('Mismatch in modulus vs exponents.')
+      if private_exponent >= modulus:
+        raise ValueError('Mismatch in private_exponent vs exponents.')
+      if public_exponent >= modulus:
+        raise ValueError('Mismatch in public_exponent vs exponents.')
       # Takes a few (10 seconds).
       prime1, prime2 = recover_rsa_prime1_from_exponents(modulus, private_exponent, public_exponent), 0
     else:
