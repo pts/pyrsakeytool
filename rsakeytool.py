@@ -400,19 +400,6 @@ def is_rsa_private_key_complete(d, effort=None):
     effort = 999  # Many checks.
   if not isinstance(d, dict):
     raise TypeError
-  # !! Do a more thorough check by default, like this:
-  #   assert is_prime(prime1)
-  #   assert is_prime(prime2)
-  #   assert modulus == prime1 * prime2
-  #   lcm = (prime1 - 1) * (prime2 - 1) // gcd(prime1 - 1, prime2 - 1)
-  #   assert 1 <= public_exponent < lcm
-  #   assert gcd(public_exponent, lcm) == 1
-  #   #assert 1 <= private_exponent < lcm  # Not true in the example.
-  #   assert gcd(private_exponent, lcm) == 1
-  #   private_exponent = modinv(public_exponent, (prime1 - 1) * (prime2 - 1))
-  #   coefficient == modinv(prime2, prime1)
-  #   exponent1 == private_exponent % (prime1 - 1)
-  #   exponent2 == private_exponent % (prime2 - 1)
   if not (
       d.get('modulus') and d.get('public_exponent') and
       d.get('private_exponent') and d.get('prime1') and d.get('prime2') and
