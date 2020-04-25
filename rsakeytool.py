@@ -34,10 +34,12 @@ except NameError:
 
 
 if bytes is str:  # Python 2.x.
-  bb = str
+  bb = aa = str
 else:  # Python 3.x.
   def bb(data):
     return bytes(data, 'ascii')
+  def aa(data):
+    return str(data, 'ascii')
 
 
 bbe = bb('')
@@ -448,7 +450,7 @@ def get_rsa_private_key(**kwargs):
   # * private_exponent: MPI of RSA secret exponent d;
   # * prime2: (smaller prime) MPI of RSA secret prime value p;
   # * prime1: (larger prime) MPI of RSA secret prime value q (p < q);
-  # * exponent: MPI of u, the multiplicative inverse of p, mod q.
+  # * coefficient: MPI of u, the multiplicative inverse of p, mod q.
   return {
       'modulus': modulus,  # Public.
       'prime1': prime1,
@@ -566,9 +568,18 @@ def parse_rsa_pem(data,
   if data.startswith(_bbbegin[1:]):
     i = len(_bbbegin) - 1
   else:
-    i = data.find(_bbbegin)  # TODO(pts): Treat \r as \n.
+    i = 0
+    while data[i : i + 1].isspace():
+      i += 1
+    if i == len(data):
+      raise ValueError('RSA key file contains only whitespace.')
+    if has_hexa_header(data, i):
+      return parse_rsa_hexa(data, i)
+    if data[i : i + 1] != _bbd:
+      raise ValueError('dash not found in pem.')
+    i = data.find(_bbbegin, i)  # TODO(pts): Treat \r as \n.
     if i < 0:
-      raise ValueError('BEGIN not found in pem: %r')
+      raise ValueError('BEGIN not found in pem.')
     i += len(_bbbegin)
   j = data.find(_bbnl, i + 1)
   if j < 0:
@@ -639,6 +650,82 @@ def serialize_rsa_msblob(d, _bbe=bbe, _bbz=bbz, _bbmsblob=bbmsblob):
       le_padded(d['private_exponent'], size)))
 
 
+HEXA_KEYS = ('modulus', 'public_exponent', 'private_exponent', 'prime1', 'prime2', 'exponent1', 'exponent2', 'coefficient')
+HEXA_ALIASES = {'n': 'modulus', 'e': 'public_exponent', 'd': 'private_exponent', 'q': 'prime1', 'p': 'prime2', 'u': 'coefficient'}
+
+
+def has_hexa_header(data, i, _bbu=bb('_'), _bbeq=bb('=')):
+  i0 = i
+  while data[i : i + 1].isalnum() or data[i : i + 1] == _bbu:
+    i += 1
+  if not (data[i : i + 1] .isspace() or data[i : i + 1] == _bbeq):
+    return False
+  key = aa(data[i0 : i])
+  key = HEXA_ALIASES.get(key, key)
+  return key in HEXA_KEYS
+
+
+def parse_rsa_hexa(data, i, _bbu=bb('_'), _bbeq=bb('=')):
+  d, j = {}, len(data)
+  while i < j:
+    i0 = i
+    while data[i : i + 1].isalnum() or data[i : i + 1] == _bbu:
+      i += 1
+    i1 = i
+    while data[i : i + 1].isspace():
+      i += 1
+    key = aa(data[i0 : i1])
+    if data[i : i + 1] != _bbeq:
+      raise ValueError('Assignment expected after hexa key %r.' % key)
+    i += 1
+    key = HEXA_ALIASES.get(key, key)
+    if key not in HEXA_KEYS:
+      raise ValueError('Unknown assignment key: %r' % key)
+    if key in d:
+      raise ValueError('Duplicate assignment key %r.' % key)
+    while data[i : i + 1].isspace():
+      i += 1
+    i2 = i
+    while j > i and not data[i : i + 1].isspace():
+      i += 1
+    try:
+      value = int(data[i2 : i], 0)
+    except ValueError:
+      value = None
+    if value is None:
+      raise ValueError('Syntax error in integer for assignment key %r: %r' % (key, data[i2 : i]))
+    if value < 0:
+      raise ValueError('Negative integer for assignment key %r.' % key)
+    d[key] = value
+    if i == j:
+      break
+    i3 = i
+    while data[i : i + 1].isspace():
+      i += 1
+    if i == i3:
+      raise ValueError('Missing whitespace after assignment of key %r.' % key)
+  return d
+
+
+def serialize_rsa_hexa(d, _bbassign=bb(' = '), _bb0x=bb('0x'), _bbnl=bbnl, _bbe=bbe, _bbpx=bb('%x')):
+  """Serializes hexa: hexadecimal assignment."""
+  output = []
+  for key in HEXA_KEYS:
+    value = d[key]
+    output.append(bb(key))
+    output.append(_bbassign)
+    try:
+      value = _bbpx % value
+    except TypeError:  # Python 3.1.
+      output.append(bytes(hex(value), 'ascii'))
+      value = ()
+    if value:
+      output.append(_bb0x)
+      output.append(value)
+    output.append(_bbnl)
+  return _bbe.join(output)
+
+
 def parse_rsa_msblob_numbers(data, i=0, j=None):
   if j is None:
     j = len(data)
@@ -670,14 +757,19 @@ def convert_rsa_data(d, format='pem', effort=None,
       # Microsoft SSH RSA private key format, output of:
       # openssl rsa -outform msblob -in key.pem -out key.msblob
       d = parse_rsa_msblob_numbers(data, len(_bbmsblob))
+    elif has_hexa_header(data, 0):
+      d = parse_rsa_hexa(data, 0)
     else:
-      if data.startswith(_bbd) or data[:1].isspace():  # PEM format.
+      if data.startswith(_bbd) or data[:1].isspace():  # PEM or hexa format.
         data = parse_rsa_pem(data)
-      i, j, i0 = parse_rsa_der_header(data)  # DER format.
-      if effort is None or effort >= 2 or format == 'dict':
-        d = parse_rsa_der_numbers(data, i, j)
+      if isinstance(data, dict):
+        d, data = data, None
       else:
-        d, data = None, data[i0 : j]
+        i, j, i0 = parse_rsa_der_header(data)  # DER format.
+        if effort is None or effort >= 2 or format == 'dict':
+          d = parse_rsa_der_numbers(data, i, j)
+        else:
+          d, data = None, data[i0 : j]
   if isinstance(d, dict):
     if not is_rsa_private_key_complete(d, effort):
       d = get_rsa_private_key(**d)
@@ -687,6 +779,8 @@ def convert_rsa_data(d, format='pem', effort=None,
       return serialize_rsa_dropbear(d)
     if format == 'msblob':
       return serialize_rsa_msblob(d)
+    if format == 'hexa':
+      return serialize_rsa_hexa(d)
     d, data = None, serialize_rsa_der(d)
   if not (isinstance(data, bytes) and d is None):
     raise TypeError
@@ -704,13 +798,14 @@ def convert_rsa_data(d, format='pem', effort=None,
 
 # --- main()
 
-
-def main(argv):
+def quick_test():
+  import sys
   # Example 4096-bit key (modulus size).
-  d = get_rsa_private_key(
-      modulus=0x00c7e5c2aaa8e9e8be55a16277ab0c60d5249c0996578ae1e63261664c3b08e42ce69af7817255d0c2b3cc640b311e7d76cf1a346839905195045a040c819bd2227300130a1a7ebe78609d69c0170a1362acd57e2a605b035ae9a4904d322621079b1484640269b7a115997ced3a1fb06e7e298ad57746a7395d9b09893e7d63c48f802132cd9c530a80af0d253705dfb1212adae3a29642aeeb18c52103ec8b5a731e65af07a6b1667e385f9208c7e41ef22085f9af955b373ecc96b04b20b24a9f835ec1787b4e5471a459b7ac23a3e8e1ee8c915081a1ee4a55a13c2b077f6c58aa7db1e4badcf670c24ff14c179146e573eb99db77bdf3a83bce808185b194953d5ccc78be03ec7665c6bab34a7fe45bfb306efa8d1e5e9dc2403ef66a1da2cae70b7026c5223782ae28252eac0103715e2e4341b9040d46f886bd198ccd832fddc3b977fa73015535927ed7813f62453722a3e64e3cec779bda447cd2455da608ea227cd35dfc69db9bced50d9c3d826bc8db25d7657a6268084dd8c267e36cc7882df00ae583deab706c558a60509dbfeb4a098c4df466c44bd86e7d28e53480f2c855b7b6688ebd1e1d1c4ae0e61718f114c88e274833dbdb058721d37aa43ff1e0d33dd14fc4463d86f0fe7f32fb438204536f67f25cfc7d85d6eb58e5122533ee69c7eda10f95b1a5217a23c25ef57292b571d60919ee20737cafff09,
-      public_exponent=0x10001,
-      prime1=0x00f0710459cd01a206f4c4dbb8cd591c3f240c887c11bfef21d00cb0b973e4adafb373c1fec279252771e78f0cde980723f97c5457e72648e2eafaea98414eb8448be103e0e276c0a772735e9eacb45e2ac8d03562ea2c72fb1b83c101e6355aae764dff1fcd7f18ea3c8c384052e64cff91a23085d1149d9ed6c7e3bfa1e09735d6ebfeb981ed168c4942f384570c54b07c01e61afc9277a959147715ec17a29fc0a41e4c694813f755ba4f5ba21f221c0ac7d44e499e0856c66c1330b4d32f09e7b4f3bb47f6a564d381872e0d2b1b3c3dc132d31500e7fa7bde2c302a217bedba964d2dbc02d84b47cbe8bafac184963e65b028d9f6fa71b975440d0513aea3)
+  d = convert_rsa_data(bb('''
+      public_exponent = 0x10001
+      p = 0xf0710459cd01a206f4c4dbb8cd591c3f240c887c11bfef21d00cb0b973e4adafb373c1fec279252771e78f0cde980723f97c5457e72648e2eafaea98414eb8448be103e0e276c0a772735e9eacb45e2ac8d03562ea2c72fb1b83c101e6355aae764dff1fcd7f18ea3c8c384052e64cff91a23085d1149d9ed6c7e3bfa1e09735d6ebfeb981ed168c4942f384570c54b07c01e61afc9277a959147715ec17a29fc0a41e4c694813f755ba4f5ba21f221c0ac7d44e499e0856c66c1330b4d32f09e7b4f3bb47f6a564d381872e0d2b1b3c3dc132d31500e7fa7bde2c302a217bedba964d2dbc02d84b47cbe8bafac184963e65b028d9f6fa71b975440d0513aea3
+      q = 0xd4d51ee89043051536d581b984820ba0925c006b327490ac010b27780b4612873d7c1ed1accd4e994518a51252de889410c8fefdb7fbfe05352506897a8e507eda7063ff33adda4020be19a32b26d13f35c0aa92d67cdca855561feb0e8d929481e29ce65906acc37eb514ac9b4743d8b6605ff6caa4abb1372c5b6d3c15639fc441cf5780f5dce59dc71c04e41b396bb84162b6d26f33b83ab6f63635f637d0dc36d263ba78c1bd0ba80726cda6ec09e90cd4933948ec17d43762f54c3fa8d33ed90b62204f35ba8b9354addbf227437ff5fe7f6602a3377f48a5e4db2fadd97b02ffe394a9cf2ffef2bbb1c0fa7b495306a4191aa9f4c5fea6dc9ec5c41263
+  '''), 'dict')
   assert is_rsa_private_key_complete(d)
   open('t.der', 'wb').write(convert_rsa_data(d, 'der'))
   open('t.pem', 'wb').write(convert_rsa_data(d, 'pem'))
@@ -718,15 +813,18 @@ def main(argv):
   open('t2.pem', 'wb').write(convert_rsa_data(d, 'pem2'))
   open('t.dropbear', 'wb').write(convert_rsa_data(d, 'dropbear'))
   open('t.msblob', 'wb').write(convert_rsa_data(d, 'msblob'))
+  open('t.hexa', 'wb').write(convert_rsa_data(d, 'hexa'))
 
   public_exponent, private_exponent, prime1, prime2, exponent1, exponent2, coefficient, modulus = (
       d['public_exponent'], d['private_exponent'], d['prime1'], d['prime2'], d['exponent1'], d['exponent2'], d['coefficient'], d['modulus'])
   # All 256, i.e. about 2048 bits.
-  print(len('%x' % prime1) >> 1)
-  print(len('%x' % prime2) >> 1)
-  print(len('%x' % exponent1) >> 1)
-  print(len('%x' % exponent2) >> 1)
-  print(len('%x' % coefficient) >> 1)
+  assert (len('%x' % prime1) >> 1) == 256
+  assert (len('%x' % prime2) >> 1) == 256
+  assert (len('%x' % exponent1) >> 1) == 256
+  assert (len('%x' % exponent2) >> 1) == 256
+  assert (len('%x' % coefficient) >> 1) == 256
+  print('OK0')
+  sys.stdout.flush()
 
   gcdm = gcd(prime1 - 1, prime2 - 1)
   lcm = (prime1 - 1) * (prime2 - 1) // gcdm
@@ -738,12 +836,14 @@ def main(argv):
   #print(gcd(prime1 - 1, prime2 - 1))  # Can be larger than 1.
   assert private_exponent2 == crt2(exponent1, prime1 - 1, exponent2, (prime2 - 1) // gcdm)
   assert private_exponent2 == crt2(exponent1, (prime1 - 1) // gcdm, exponent2, (prime2 - 1))
-  print('OK0')
+  print('OK1')
+  sys.stdout.flush()
 
   # Takes a few (10) seconds, depends on random.
   #assert prime1 == recover_rsa_prime1_from_exponents(modulus, private_exponent, public_exponent)
 
-  print('OK1')
+  print('OK2')
+  sys.stdout.flush()
   x = 41
   y = pow(x, private_exponent, modulus)
   mp1 = pow(x, exponent1, prime1)
@@ -755,7 +855,13 @@ def main(argv):
   assert y == y2
   assert y == y3  # True for all x < modulus, even for non-relative-primes.
   assert pow(y, public_exponent, modulus) == x  # True for all x < modulus, even for non-relative-primes.
+
   print('OK')
+  sys.stdout.flush()
+
+
+def main(argv):
+  quick_test()
 
 
 if __name__ == '__main__':

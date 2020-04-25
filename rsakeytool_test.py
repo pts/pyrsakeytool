@@ -80,6 +80,8 @@ def get_test_rsa_key():
 
 
 class RsakeytoolTest(unittest.TestCase):
+  maxDiff = None
+
   def test_convert(self):
     d = get_test_rsa_key()
     assert rsakeytool.is_rsa_private_key_complete(d)
@@ -95,6 +97,14 @@ class RsakeytoolTest(unittest.TestCase):
     assert convert_rsa_data(der, 'dict') == d
     assert convert_rsa_data(convert_rsa_data(der, 'dropbear'), 'der') == der
     assert convert_rsa_data(convert_rsa_data(der, 'msblob'), 'der') == der
+    d = {'public_exponent': 5, 'prime1': 23, 'prime2': 29}
+    dd = {'public_exponent': 5, 'private_exponent': 493, 'prime1': 29, 'prime2': 23, 'modulus': 667, 'exponent1': 17, 'exponent2': 9, 'coefficient': 24}
+    self.assertEqual(dd, convert_rsa_data(d, 'dict'))
+    self.assertEqual(bb('modulus = 0x29b\npublic_exponent = 0x5\nprivate_exponent = 0x1ed\nprime1 = 0x1d\nprime2 = 0x17\nexponent1 = 0x11\nexponent2 = 0x9\ncoefficient = 0x18\n'),
+                     convert_rsa_data(d, 'hexa'))
+    hexa_data = bb('n  = 0x29b\npublic_exponent   =5\nprivate_exponent\t\r=\n0x1Ed\nprime1 = 0x1d\nprime2 = 23\nexponent1 = 0x11\nexponent2 = 0x9\ncoefficient = 0X18\n')
+    self.assertEqual(dd, convert_rsa_data(bb(' \t\r\n  ') + hexa_data, 'dict'))
+    self.assertEqual(dd, convert_rsa_data(hexa_data, 'dict'))
 
   def test_golden(self):
     d = get_test_rsa_key()
