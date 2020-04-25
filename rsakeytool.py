@@ -558,13 +558,15 @@ def convert_rsa_data(d, format='pem', effort=None,
       # TODO(pts): Check for disallowed characters (e.g. ~) in data.
       data = binascii.a2b_base64(data)
     i, j, i0 = parse_rsa_der_header(data)
-    if effort is None or effort >= 2:
+    if effort is None or effort >= 2 or format == 'dict':
       d = parse_rsa_der_numbers(data, i, j)
     else:
       d, data = None, data[i0 : j]
   if isinstance(d, dict):
     if not is_rsa_private_key_complete(d, effort):
       d = get_rsa_private_key(**d)
+    if format == 'dict':
+      return d
     d, data = None, get_rsa_der(d)
   if not (isinstance(data, bytes) and d is None):
     raise TypeError
