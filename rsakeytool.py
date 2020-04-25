@@ -21,25 +21,37 @@ except NameError:
   bytes = str
 
 
-def uint_to_any_msb(value, is_low=False):
+if bytes is str:  # Python 2.x.
+  bb = str
+else:  # Python 3.x.
+  def bb(data):
+    return bytes(data, 'ascii')
+
+
+bbe = bb('')
+bbnl = bb('\n')
+
+
+def uint_to_any_msb(value, is_low=False,
+                    _bbz=bb('\0'), _bb0=bb('0'), _bb8=bb('8'), _bb00=bb('00'), _bbpx=bb('%x')):
   if value < 0:
     raise ValueError('Bad negative uint.')
   if not is_low and value <= 0xffffffffffffffff:
-    return struct.pack('>Q', value).lstrip(b'\0') or b'\0'
+    return struct.pack('>Q', value).lstrip(_bbz) or _bbz
   else:
     try:
-      value = b'%x' % value
+      value = _bbpx % value
     except TypeError:  # Python 3.1.
       value = bytes(hex(value), 'ascii')[2:]
     if len(value) & 1:
-      value = b'0' + value
-    elif is_low and not b'0' <= value[:1] < b'8':
-      value = b'00' + value
+      value = _bb0 + value
+    elif is_low and not _bb0 <= value[:1] < _bb8:
+      value = _bb00 + value
     return binascii.unhexlify(value)
 
 
-def der_field(xtype, args):
-  output = [b'', b'']
+def der_field(xtype, args, _bbe=bbe):
+  output = [_bbe, _bbe]
   if isinstance(args, bytes):
     args = (args,)
   elif not isinstance(args, (tuple, list)):
@@ -57,7 +69,7 @@ def der_field(xtype, args):
   else:
     output[1] = uint_to_any_msb(size)
     output[0] = struct.pack('>BB', xtype, 0x80 | len(output[1]))
-  return b''.join(output)
+  return _bbe.join(output)
 
 
 def der_oid(value):
@@ -87,14 +99,14 @@ def der_oid(value):
   return der_field(6, output)
 
 
-assert binascii.hexlify(der_oid('1.2.840.113549.1.1.1')) == b'06092a864886f70d010101'
+assert binascii.hexlify(der_oid('1.2.840.113549.1.1.1')) == bb('06092a864886f70d010101')
 
 
 def der_bytes(value):
   return der_field(4, value)
 
 
-def der_value(value):
+def der_value(value, _bb50=bb('\5\0')):
   if isinstance(value, (int, long)):
     return der_field(2, uint_to_any_msb(value, is_low=True),)
   elif isinstance(value, tuple):
@@ -102,20 +114,20 @@ def der_value(value):
   elif isinstance(value, bytes):
     return value
   elif value is None:
-    return b'\5\0'
+    return _bb50
   else:
     raise TypeError('Bad DER data type: %s' % type(value))
 
 
-def base64_encode(data):
-  data = binascii.b2a_base64(data).rstrip(b'\n')
+def base64_encode(data, _bbnl=bbnl):
+  data = binascii.b2a_base64(data).rstrip(_bbnl)
   if not isinstance(data, bytes):
     raise TypeError
   output, i = [], 0
   while i < len(data):
     output.append(data[i : i + 64])  # base64.encodestring uses 76.
     i += 64
-  return b'\n'.join(output)
+  return _bbnl.join(output)
 
 
 # --- RSA calculations.
@@ -357,12 +369,12 @@ def get_rsa_der(d):
 OID_RSA_ENCRYPTION = '1.2.840.113549.1.1.1'  # rsaEncryption.
 
 
-def convert_rsa_data(d, format='pem'):
+def convert_rsa_data(d, format='pem', _bbe=bbe, _bb30=bb('\x30'), _bbd=bb('-')):
   if isinstance(d, bytes):
     data = d
-    if data.startswith(b'\x30'):
+    if data.startswith(_bb30):
       pass  # !! Remove der2 header.
-    elif data.startswith(b'-') or data[:1].isspace():
+    elif data.startswith(_bbd) or data[:1].isspace():
       raise ValueError('pem input not supported.')  # TODO(pts): Add support.
     else:
       raise ValueError('Expected der input.')
@@ -375,12 +387,12 @@ def convert_rsa_data(d, format='pem'):
   if format == 'der':
     return data
   if format == 'pem':
-    return b''.join((b'-----BEGIN RSA PRIVATE KEY-----\n', base64_encode(data), b'\n-----END RSA PRIVATE KEY-----\n'))
+    return _bbe.join((bb('-----BEGIN RSA PRIVATE KEY-----\n'), base64_encode(data), bb('\n-----END RSA PRIVATE KEY-----\n')))
   data = der_value((0, (der_oid(OID_RSA_ENCRYPTION), None), der_bytes(data)))
   if format == 'der2':
     return data
   if format == 'pem2':
-    return b''.join((b'-----BEGIN PRIVATE KEY-----\n', base64_encode(data), b'\n-----END PRIVATE KEY-----\n'))
+    return _bbe.join((bb('-----BEGIN PRIVATE KEY-----\n'), base64_encode(data), bb('\n-----END PRIVATE KEY-----\n')))
   raise ValueError('Unknown RSA data format: %r' % (format,))
 
 
