@@ -466,26 +466,55 @@ DER_OID_RSA_ENCRYPTION = der_oid(OID_RSA_ENCRYPTION)
 DER2_RSA_SEQUENCE_DATA = DER_OID_RSA_ENCRYPTION + der_value(None)
 
 
-def convert_rsa_data(d, format='pem', effort=None, _bbe=bbe, _bb30=bb('\x30'), _bbd=bb('-'), _bb50=bb('\5\0')):
+def convert_rsa_data(d, format='pem', effort=None,
+                     _bbe=bbe, _bb30=bb('\x30'), _bbd=bb('-'), _bb50=bb('\5\0'), _bbbegin=bb('\n-----BEGIN '), _bbend=bb('\n-----END '), _bbnl=bbnl, _bbcolon=bb(':'),
+                     _bbencrypted=bb('ENCRYPTED '), _bbrsapk=bb('RSA PRIVATE KEY-----\n'), _bbpk=bb('PRIVATE KEY-----\n')):
   if isinstance(d, bytes):
     data = d
-    if data.startswith(_bb30):
-      i = 0
+    if data.startswith(_bbd) or data[:1].isspace():
+      if data.startswith(_bbbegin[1:]):
+        i = len(_bbbegin) - 1
+      else:
+        i = data.find(_bbbegin)  # TODO(pts): Treat \r as \n.
+        if i < 0:
+          raise ValueError('BEGIN not found in pem: %r')
+        i += len(_bbbegin)
+      j = data.find(_bbnl, i + 1)
+      if j < 0:
+        raise ValueError('EOF in pem BEGIN line.')
+      if data[i : i + len(_bbrsapk)] == _bbrsapk:
+        pass
+      elif data[i : i + len(_bbpk)] == _bbpk:
+        pass
+      elif data[i : i + len(_bbencrypted)] == _bbencrypted:
+        raise ValueError('Encrypted pem not supported.')
+      else:
+        raise ValueError('Unsupported pem type: %r' % data[i - len(_bbbegin) + 1 : j])
+      i, j = j, data.find(_bbd, j)
+      if j <= 0:
+        raise ValueError('End of pem not found.')
+      j -= 1
+      if data[j : j + len(_bbend)] != _bbend:
+        raise ValueError('END not found in pem.')
+      data = _bbe.join(data[i : j].replace(_bbnl, _bbe).split())
+      if _bbcolon in data:
+        raise ValueError('Encrypted RSA private key not supported.')
+      # TODO(pts): Check for disallowed characters (e.g. ~) in data.
+      data = binascii.a2b_base64(data)
+    if not data.startswith(_bb30):
+      raise ValueError('Expected der or pem input.')
+    i = 0
+    i, size = parse_der_sequence_header(data, i)
+    i = parse_der_zero(data, i)
+    if data[i : i + 1] == _bb30:
       i, size = parse_der_sequence_header(data, i)
-      i = parse_der_zero(data, i)
-      if data[i : i + 1] == _bb30:
-        i, size = parse_der_sequence_header(data, i)
-        if data[i : i + size] != DER2_RSA_SEQUENCE_DATA:
-          raise ValueError('Unsupported der2 sequence.')
-        i += size
-        i, size = parse_der_bytes_header(data, i)
-        if len(data) < i + size:
-          raise ValueError('EOF in der2 bytes.')
-        data = data[i : i + size]
-    elif data.startswith(_bbd) or data[:1].isspace():
-      raise ValueError('pem input not supported.')  # TODO(pts): Add support.
-    else:
-      raise ValueError('Expected der input.')
+      if data[i : i + size] != DER2_RSA_SEQUENCE_DATA:
+        raise ValueError('Unsupported der2 sequence.')
+      i += size
+      i, size = parse_der_bytes_header(data, i)
+      if len(data) < i + size:
+        raise ValueError('EOF in der2 bytes.')
+      data = data[i : i + size]
   elif isinstance(d, dict):
     if not is_rsa_private_key_complete(d):
       d = get_rsa_private_key(**d)
@@ -517,9 +546,9 @@ pem = convert_rsa_data(d, 'pem')
 der2 = convert_rsa_data(d, 'der2')
 pem2 = convert_rsa_data(d, 'pem2')
 assert convert_rsa_data(der, 'der') == der
-#!!assert convert_rsa_data(pem, 'der') == der
+assert convert_rsa_data(pem, 'der') == der
 assert convert_rsa_data(der2, 'der') == der
-#!!assert convert_rsa_data(pem2, 'der') == der
+assert convert_rsa_data(pem2, 'der') == der
 #!!parse der to d.
 
 open('t.der', 'wb').write(der)
