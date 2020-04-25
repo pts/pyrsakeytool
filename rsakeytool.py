@@ -516,7 +516,7 @@ def convert_rsa_data(d, format='pem', effort=None,
         raise ValueError('EOF in der2 bytes.')
       data = data[i : i + size]
   elif isinstance(d, dict):
-    if not is_rsa_private_key_complete(d):
+    if not is_rsa_private_key_complete(d, effort):
       d = get_rsa_private_key(**d)
     data = get_rsa_der(d)
   else:
