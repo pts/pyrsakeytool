@@ -319,6 +319,14 @@ def get_rsa_private_key(**kwargs):
         raise ValueError('Bad coefficient.')
       prime2 = modinv(coefficient, prime1)
     elif bool(modulus) and ec == 2:
+      if private_exponent <= 0:
+        raise ValueError('Bad private_exponent.')
+      if public_exponent <= 0:
+        raise ValueError('Bad public_exponent.')
+      if modulus <  2 * 3:
+        raise ValueError('Bad modulus.')
+      if private_exponent * public_exponent >= modulus:
+        raise ValueError('Mismatch in modulus vs exponents.')
       # Takes a few (10 seconds).
       prime1, prime2 = recover_rsa_prime1_from_exponents(modulus, private_exponent, public_exponent), 0
     else:
@@ -363,13 +371,13 @@ def get_rsa_private_key(**kwargs):
   if not 0 <= private_exponent < pp1:
     raise ValueError('Bad private_exponent.')
   if not 0 <= public_exponent < pp1:
-    raise ValueError('Bad private_exponent.')
+    raise ValueError('Bad public_exponent.')
   if not private_exponent:
     private_exponent = modinv(public_exponent, pp1)
   elif not public_exponent:
     public_exponent = modinv(private_exponent, pp1)
   elif private_exponent * public_exponent % pp1 != 1:
-    raise ValueError('Mismatch in private_exponent vs public_exponsnet.')
+    raise ValueError('Mismatch in private_exponent vs public_exponent.')
   lcm = pp1 // gcd(prime1 - 1, prime2 - 1)
   if gcd(public_exponent, lcm) != 1:
     raise ValueError('Mismatch in public_exponent vs primes.')
