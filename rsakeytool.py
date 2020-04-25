@@ -1,8 +1,19 @@
-#! /usr/bin/python
+#! /bin/sh
 # by pts@fazekas.hu at Sat Apr 25 01:21:50 CEST 2020
 #
-# DER and PEM generators (ASN.1): https://0day.work/how-i-recovered-your-private-key-or-why-small-keys-are-bad/
-#
+
+""":" # rsakeytool.py: Convert between various RSA private key formats.
+
+type python    >/dev/null 2>&1 && exec python    -- "$0" ${1+"$@"}
+type python3   >/dev/null 2>&1 && exec python3   -- "$0" ${1+"$@"}
+type python2.7 >/dev/null 2>&1 && exec python2.7 -- "$0" ${1+"$@"}
+type python2.6 >/dev/null 2>&1 && exec python2.6 -- "$0" ${1+"$@"}
+type python2.5 >/dev/null 2>&1 && exec python2.5 -- "$0" ${1+"$@"}
+type python2.4 >/dev/null 2>&1 && exec python2.4 -- "$0" ${1+"$@"}
+exec python -- ${1+"$@"}; exit 1  # Just for the error message.
+
+This script needs Python 2.4, 2.5, 2.6, 2.7 or 3.x.
+"""
 
 import binascii
 import struct
@@ -363,6 +374,7 @@ def is_rsa_private_key_complete(d):
 
 
 def get_rsa_der(d):
+  # DER and PEM generators (ASN.1): https://0day.work/how-i-recovered-your-private-key-or-why-small-keys-are-bad/
   return der_value((0, d['modulus'], d['public_exponent'], d['private_exponent'], d['prime1'], d['prime2'], d['exponent1'], d['exponent2'], d['coefficient']))
 
 
