@@ -27,7 +27,10 @@ def uint_to_any_msb(value, is_low=False):
   if not is_low and value <= 0xffffffffffffffff:
     return struct.pack('>Q', value).lstrip(b'\0') or b'\0'
   else:
-    value = b'%x' % value
+    try:
+      value = b'%x' % value
+    except TypeError:  # Python 3.1.
+      value = bytes(hex(value), 'ascii')[2:]
     if len(value) & 1:
       value = b'0' + value
     elif is_low and not b'0' <= value[:1] < b'8':
@@ -372,12 +375,12 @@ def convert_rsa_data(d, format='pem'):
   if format == 'der':
     return data
   if format == 'pem':
-    return b'-----BEGIN RSA PRIVATE KEY-----\n%s\n-----END RSA PRIVATE KEY-----\n' % base64_encode(data)
+    return b''.join((b'-----BEGIN RSA PRIVATE KEY-----\n', base64_encode(data), b'\n-----END RSA PRIVATE KEY-----\n'))
   data = der_value((0, (der_oid(OID_RSA_ENCRYPTION), None), der_bytes(data)))
   if format == 'der2':
     return data
   if format == 'pem2':
-    return b'-----BEGIN PRIVATE KEY-----\n%s\n-----END PRIVATE KEY-----\n' % base64_encode(data)
+    return b''.join((b'-----BEGIN PRIVATE KEY-----\n', base64_encode(data), b'\n-----END PRIVATE KEY-----\n'))
   raise ValueError('Unknown RSA data format: %r' % (format,))
 
 
