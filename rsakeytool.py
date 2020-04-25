@@ -874,6 +874,7 @@ def main(argv):
         'There is NO WARRANTY. Use at your risk.\n'
         'Usage: %s rsa [<flag> ...]\n'
         'Flags:\n'
+        '-dump\n'
         '-in <input-filename>\n'
         '-out <output-filename>\n'
         '-outform <output-format>: Any of der, pem, der2, pem2, msblob, dropbear, hexa.\n'
@@ -889,11 +890,14 @@ def main(argv):
   while i < len(argv):
     arg = argv[i]
     i += 1
+    if arg == '-dump':
+      format = 'dict'
+      continue
     if arg not in ('-in', '-out', '-outform'):
-      sys.stderr.write('fatal: unknown flag (use --help): %s' % arg)
+      sys.stderr.write('fatal: unknown flag (use --help): %s\n' % arg)
       sys.exit(1)
     if i == len(argv):
-      sys.stderr.write('fatal: missing argument for flag: %s' % arg)
+      sys.stderr.write('fatal: missing argument for flag: %s\n' % arg)
       sys.exit(1)
     value = argv[i]
     i += 1
@@ -903,17 +907,20 @@ def main(argv):
       outfn = value
     elif arg == '-outform':
       if value == 'dict':
-        sys.stderr.write('fatal: -outform dict not supported on the command-line')
+        sys.stderr.write('fatal: -outform dict not supported on the command-line\n')
         sys.exit(1)
       format = value
   if infn is None:
-    sys.stderr.write('fatal: missing -in ...')
-    sys.exit(1)
-  if outfn is None:
-    sys.stderr.write('fatal: missing -out ...')
+    sys.stderr.write('fatal: missing -in ...\n')
     sys.exit(1)
   if format is None:
-    sys.stderr.write('fatal: missing -outform ...')
+    sys.stderr.write('fatal: missing -outform ...\n')
+    sys.exit(1)
+  if outfn is None and format != 'dict':
+    sys.stderr.write('fatal: missing -out ...\n')
+    sys.exit(1)
+  if outfn is not None and format == 'dict':
+    sys.stderr.write('fatal: unexpected -out ... for -dump\n')
     sys.exit(1)
 
   f = open(infn, 'rb')
@@ -921,12 +928,16 @@ def main(argv):
     data = f.read()  # TODO(pts): Limit to 1 MiB etc., but not for gpg(1).
   finally:
     f.close()
-  data = convert_rsa_data(data, format)
-  f = open(outfn, 'wb')
-  try:
-    f.write(data)
-  finally:
-    f.close()
+  if format == 'dict':  # -dump.
+    sys.stdout.write(aa(convert_rsa_data(data, 'hexa')))
+    sys.stdout.flush()
+  else:
+    data = convert_rsa_data(data, format)
+    f = open(outfn, 'wb')
+    try:
+      f.write(data)
+    finally:
+      f.close()
 
 
 if __name__ == '__main__':
