@@ -879,7 +879,7 @@ def main(argv):
         '-dump\n'
         '-in <input-filename>\n'
         '-out <output-filename>\n'
-        '-outform <output-format>: Any of der, pem, der2, pem2, msblob, dropbear, hexa.\n'
+        '-outform <output-format>: Any of der, pem (default), der2, pem2, msblob, dropbear, hexa.\n'
         '-inform <input-format>; Ignored. Autodetected instead.\n'
         .replace('%s', argv[0]))
     sys.exit(1)
@@ -889,7 +889,8 @@ def main(argv):
     #sys.exit(1)
     i += 1
 
-  infn = outfn = format = None
+  infn = outfn = None
+  format = 'pem'
   while i < len(argv):
     arg = argv[i]
     i += 1
