@@ -42,10 +42,11 @@ else:  # Python 3.x.
 
 bbe = bb('')
 bbnl = bb('\n')
+bbz = bb('\0')
 
 
 def uint_to_any_be(value, is_low=False,
-                    _bbz=bb('\0'), _bb0=bb('0'), _bb8=bb('8'), _bb00=bb('00'), _bbpx=bb('%x')):
+                    _bbz=bbz, _bb0=bb('0'), _bb8=bb('8'), _bb00=bb('00'), _bbpx=bb('%x')):
   if value < 0:
     raise ValueError('Bad negative uint.')
   if not is_low and value <= 0xffffffffffffffff:
@@ -67,7 +68,10 @@ if getattr(int, 'from_bytes', None):
     return _from_bytes(v, 'big')
 else:
   def uint_from_be(data, _hexlify=binascii.hexlify):  # Not in six.
-    return int(_hexlify(data), 16)
+    data = _hexlify(data)
+    if data:
+      return int(data, 16)
+    return 0
 
 
 def der_field(xtype, args, _bbe=bbe):
@@ -236,6 +240,17 @@ def dropbear_value(value):
   return struct.pack('>L', len(data)) + data
 
 
+# --- Microsoft SSH private key format.
+
+
+def parse_msblob_uint(data, i, j, size):
+  if j is not None and j < i + size:
+    raise ValueError('EOF in size-limited msblob uint.')
+  if len(data) < i + size:
+    raise ValueError('EOF in msblob uint.')
+  return i + size, uint_from_be(data[i + size - 1 : i - 1 : -1])
+
+
 # --- RSA calculations.
 
 
@@ -384,11 +399,15 @@ def get_rsa_private_key(**kwargs):
     modulus = prime1 * prime2
   elif not prime1:
     prime1 = modulus // prime2
+    if prime1 < 2:
+      raise ValueError('modulus too small.')
   elif not prime2:
     prime2 = modulus // prime1
+    if prime2 < 2:
+      raise ValueError('modulus too small.')
   mc = bool(prime1) + bool(prime2) + bool(modulus)
   if mc < 3:
-    raise ValueError('Found 0 in modulus, prime1, prime2.')
+    raise ValueError('Found %d in modulus, prime1, prime2.' % mc)
   if prime1 <= prime2:
     if prime1 == prime2:
       raise ValueError('Primes must not be equal.')
@@ -595,14 +614,62 @@ def serialize_rsa_dropbear(d, _bbe=bbe, _bbsshrsa=bbsshrsa):
   return _bbe.join((_bbsshrsa, dropbear_value(d['public_exponent']), dropbear_value(d['modulus']), dropbear_value(d['private_exponent']), dropbear_value(d['prime1']), dropbear_value(d['prime2'])))
 
 
+bbmsblob = struct.pack('<LL4s', 0x207, 0xa400, bb('RSA2'))
+
+
+def serialize_rsa_msblob(d, _bbe=bbe, _bbz=bbz, _bbmsblob=bbmsblob):
+  if d['public_exponent'] >> 32:
+    raise ValueError('public_exponent too large for msblob.')
+  def le_padded(value, size):
+    value = uint_to_any_be(value)[::-1]
+    psize = size - len(value)
+    if psize < 0:
+      raise ValueError('msblob value too large.')  # Shouldn't happen.
+    return value + _bbz * psize
+  modulus_bytes = uint_to_any_be(d['modulus'])[::-1]
+  size = len(modulus_bytes)
+  if size >> 29:
+    raise ValueError('modulus too large for msblob.')
+  hsize = (size + 1) >> 1
+  return _bbe.join((
+      _bbmsblob, struct.pack('<LL', size << 3, d['public_exponent']), modulus_bytes,
+      le_padded(d['prime1'], hsize), le_padded(d['prime2'], hsize),
+      le_padded(d['exponent1'], hsize), le_padded(d['exponent2'], hsize),
+      le_padded(d['coefficient'], hsize),
+      le_padded(d['private_exponent'], size)))
+
+
+def parse_rsa_msblob_numbers(data, i=0, j=None):
+  if j is None:
+    j = len(data)
+  i, bit_size = parse_msblob_uint(data, i, j, 4)
+  size = (bit_size + 7) >> 3
+  hsize = (bit_size + 15) >> 4
+  d = {}
+  i, d['public_exponent'] = parse_msblob_uint(data, i, j, 4)
+  i, d['modulus'] = parse_msblob_uint(data, i, j, size)
+  i, d['prime1'] = parse_msblob_uint(data, i, j, hsize)
+  i += hsize << 2  # We don't need these.
+  if j >= i + size and len(data) >= i + size:  # For speedup.
+    i, d['private_exponent'] = parse_msblob_uint(data, i, j, size)
+    r, q = divmod(d['modulus'], d['prime1'] or 1)
+    if not (q == 0 and r > 1 and d['prime1'] > 1 and d['public_exponent'] * d['private_exponent'] % ((d['prime1'] - 1) * (r - 1)) == 1):
+      del d['private_exponent']  # Corrupted, don't use it.
+  return d
+
+
 def convert_rsa_data(d, format='pem', effort=None,
-                     _bbe=bbe, _bbd=bb('-'), _bbsshrsa=bbsshrsa):
+                     _bbe=bbe, _bbd=bb('-'), _bbsshrsa=bbsshrsa, _bbmsblob=bbmsblob):
   if isinstance(d, bytes):
     data = d
     if data.startswith(_bbsshrsa):
       # Dropbear SSH RSA private key format, output of:
       # dropbearconvert openssh dropbear id_rsa id_rsa.dropbear
       d = parse_rsa_dropbear_numbers(data, len(_bbsshrsa))
+    elif data.startswith(_bbmsblob):
+      # Microsoft SSH RSA private key format, output of:
+      # openssl rsa -outform msblob -in key.pem -out key.msblob
+      d = parse_rsa_msblob_numbers(data, len(_bbmsblob))
     else:
       if data.startswith(_bbd) or data[:1].isspace():  # PEM format.
         data = parse_rsa_pem(data)
@@ -618,6 +685,8 @@ def convert_rsa_data(d, format='pem', effort=None,
       return d
     if format == 'dropbear':
       return serialize_rsa_dropbear(d)
+    if format == 'msblob':
+      return serialize_rsa_msblob(d)
     d, data = None, serialize_rsa_der(d)
   if not (isinstance(data, bytes) and d is None):
     raise TypeError
@@ -630,7 +699,7 @@ def convert_rsa_data(d, format='pem', effort=None,
     return data
   if format == 'pem2':
     return _bbe.join((bb('-----BEGIN PRIVATE KEY-----\n'), base64_encode(data), bb('\n-----END PRIVATE KEY-----\n')))
-  raise ValueError('Unknown RSA data format: %r' % (format,))
+  raise ValueError('Unknown RSA private key format: %r' % (format,))
 
 
 # --- main()
@@ -643,10 +712,12 @@ def main(argv):
       public_exponent=0x10001,
       prime1=0x00f0710459cd01a206f4c4dbb8cd591c3f240c887c11bfef21d00cb0b973e4adafb373c1fec279252771e78f0cde980723f97c5457e72648e2eafaea98414eb8448be103e0e276c0a772735e9eacb45e2ac8d03562ea2c72fb1b83c101e6355aae764dff1fcd7f18ea3c8c384052e64cff91a23085d1149d9ed6c7e3bfa1e09735d6ebfeb981ed168c4942f384570c54b07c01e61afc9277a959147715ec17a29fc0a41e4c694813f755ba4f5ba21f221c0ac7d44e499e0856c66c1330b4d32f09e7b4f3bb47f6a564d381872e0d2b1b3c3dc132d31500e7fa7bde2c302a217bedba964d2dbc02d84b47cbe8bafac184963e65b028d9f6fa71b975440d0513aea3)
   assert is_rsa_private_key_complete(d)
-  open('t.der', 'wb').write(der)
-  open('t.pem', 'wb').write(pem)
-  open('t2.der', 'wb').write(der2)
-  open('t2.pem', 'wb').write(pem2)
+  open('t.der', 'wb').write(convert_rsa_data(d, 'der'))
+  open('t.pem', 'wb').write(convert_rsa_data(d, 'pem'))
+  open('t2.der', 'wb').write(convert_rsa_data(d, 'der2'))
+  open('t2.pem', 'wb').write(convert_rsa_data(d, 'pem2'))
+  open('t.dropbear', 'wb').write(convert_rsa_data(d, 'dropbear'))
+  open('t.msblob', 'wb').write(convert_rsa_data(d, 'msblob'))
 
   public_exponent, private_exponent, prime1, prime2, exponent1, exponent2, coefficient, modulus = (
       d['public_exponent'], d['private_exponent'], d['prime1'], d['prime2'], d['exponent1'], d['exponent2'], d['coefficient'], d['modulus'])
