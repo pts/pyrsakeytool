@@ -22,8 +22,9 @@ import struct
 
 try:
   long
+  integer_types = (int, long)
 except NameError:
-  long = int
+  integer_types = (int,)
 
 
 try:
@@ -100,7 +101,7 @@ def der_oid(value):
     raise ValueError('Negative value in OID.')
   if value[0] > 2:
     raise ValueError('Bad value[0] in OID.')
-  if ((value[0] in (0, 1) and value[1] >= 40) or 
+  if ((value[0] in (0, 1) and value[1] >= 40) or
        value[0] == 2 and value[1] > 175):
     raise ValueError('Bad value[1] in OID.')
   output = [struct.pack('>B', value[0] * 40 + value[1])]
@@ -125,8 +126,10 @@ def der_bytes(value):
   return der_field(4, value)
 
 
-def der_value(value, _bb50=bb('\5\0')):
-  if isinstance(value, (int, long)):
+def der_value(value, _bb50=bb('\5\0')):  # Similar to ASN.1 BER and CER.
+  # https://en.wikipedia.org/wiki/X.690#DER_encoding
+  # DER has a unique encoding for each value.
+  if isinstance(value, integer_types):
     return der_field(2, uint_to_any_be(value, is_low=True),)
   elif isinstance(value, tuple):
     return der_field(0x30, map(der_value, value))
@@ -202,6 +205,35 @@ def base64_encode(data, _bbnl=bbnl):
     output.append(data[i : i + 64])  # base64.encodestring uses 76.
     i += 64
   return _bbnl.join(output)
+
+
+# --- Dropbear SSH private key format.
+
+
+def parse_dropbear_uint(data, i, j=None):
+  if j is not None and j < i + 4:
+    raise ValueError('EOF in size-limited dropbear uint size.')
+  if len(data) < i + 4:
+    raise ValueError('EOF in dropbear uint size.')
+  size, = struct.unpack('>L', data[i : i + 4])
+  i += 4
+  if j is not None and j < i + size:
+    raise ValueError('EOF in size-limited dropbear uint.')
+  if len(data) < i + size:
+    raise ValueError('EOF in dropbear uint.')
+  if size > 0 and struct.unpack('>B', data[i : i + 1])[0] >= 0x80:
+    raise ValueError('Negative der uint.')
+  return i + size, uint_from_be(data[i : i + size])
+
+
+def dropbear_value(value):
+  if isinstance(value, integer_types):
+    data = uint_to_any_be(value, is_low=True)
+  elif isinstance(value, bytes):
+    data = value
+  else:
+    raise TypeError
+  return struct.pack('>L', len(data)) + data
 
 
 # --- RSA calculations.
@@ -284,9 +316,9 @@ def gcd(a, b):
 
 def recover_rsa_prime1_from_exponents(modulus, private_exponent, public_exponent):
   """Efficiently recover non-trivial factors of n.
-  
-  From https://gist.github.com/flavienbwk/54671449419e1576c2708c9a3a711d78  
-  
+
+  From https://gist.github.com/flavienbwk/54671449419e1576c2708c9a3a711d78
+
   Typically Takes less than 10 seconds.
 
   See: Handbook of Applied Cryptography
@@ -323,7 +355,7 @@ def get_rsa_private_key(**kwargs):
     value = kwargs.get(key)
     if isinstance(value, (bytes, str)):
       kwargs2[key] = int(value, 16)
-    elif isinstance(value, (int, long)):
+    elif isinstance(value, integer_types):
       kwargs2[key] = int(value)
     elif value is not None:
       raise TypeError('Bad value for key: %r' % (key,))
@@ -437,16 +469,16 @@ def is_rsa_private_key_complete(d, effort=None):
     return False
   if effort >= 1:
     if not (
-        isinstance(d['prime1'], (int, long)) and
-        isinstance(d['prime2'], (int, long)) and
-        isinstance(d['modulus'], (int, long)) and
+        isinstance(d['prime1'], integer_types) and
+        isinstance(d['prime2'], integer_types) and
+        isinstance(d['modulus'], integer_types) and
         2 < d['prime2'] < d['prime1'] < d['modulus']):
       return False
     pm1, pm2 = d['prime1'] - 1, d['prime2'] - 1
     pp1 = pm1 * pm2
     if not (
-        isinstance(d['public_exponent'], (int, long)) and
-        isinstance(d['private_exponent'], (int, long)) and
+        isinstance(d['public_exponent'], integer_types) and
+        isinstance(d['private_exponent'], integer_types) and
         1 <= d['private_exponent'] < pp1 and
         1 <= d['public_exponent'] < pp1):
       return False
@@ -473,7 +505,7 @@ def is_rsa_private_key_complete(d, effort=None):
   return True
 
 
-def get_rsa_der(d):
+def serialize_rsa_der(d):
   # DER and PEM generators (ASN.1): https://0day.work/how-i-recovered-your-private-key-or-why-small-keys-are-bad/
   return der_value((0, d['modulus'], d['public_exponent'], d['private_exponent'], d['prime1'], d['prime2'], d['exponent1'], d['exponent2'], d['coefficient']))
 
@@ -522,52 +554,86 @@ def parse_rsa_der_header(data, i=0, _bb30=bb('\x30')):
   return i, j, i0
 
 
+def parse_rsa_pem(data,
+                  _bbe=bbe, _bbd=bb('-'),
+                  _bb30=bb('\x30'), _bb50=bb('\5\0'), _bbbegin=bb('\n-----BEGIN '), _bbend=bb('\n-----END '), _bbnl=bbnl, _bbcolon=bb(':'),
+                  _bbencrypted=bb('ENCRYPTED '), _bbrsapk=bb('RSA PRIVATE KEY-----\n'), _bbpk=bb('PRIVATE KEY-----\n')):
+  # PEM format. Used by both `openssl rsa' (and web servers) and OpenSSH.
+  if data.startswith(_bbbegin[1:]):
+    i = len(_bbbegin) - 1
+  else:
+    i = data.find(_bbbegin)  # TODO(pts): Treat \r as \n.
+    if i < 0:
+      raise ValueError('BEGIN not found in pem: %r')
+    i += len(_bbbegin)
+  j = data.find(_bbnl, i + 1)
+  if j < 0:
+    raise ValueError('EOF in pem BEGIN line.')
+  if data[i : i + len(_bbrsapk)] == _bbrsapk:
+    pass
+  elif data[i : i + len(_bbpk)] == _bbpk:
+    pass
+  elif data[i : i + len(_bbencrypted)] == _bbencrypted:
+    raise ValueError('Encrypted pem not supported.')
+  else:
+    raise ValueError('Unsupported pem type: %r' % data[i - len(_bbbegin) + 1 : j])
+  i, j = j, data.find(_bbd, j)
+  if j <= 0:
+    raise ValueError('End of pem not found.')
+  j -= 1
+  if data[j : j + len(_bbend)] != _bbend:
+    raise ValueError('END not found in pem.')
+  data = _bbe.join(data[i : j].replace(_bbnl, _bbe).split())
+  if _bbcolon in data:
+    raise ValueError('Encrypted RSA private key not supported.')
+  # TODO(pts): Check for disallowed characters (e.g. ~) in data.
+  return binascii.a2b_base64(data)
+
+
+def parse_rsa_dropbear_numbers(data, i=0, j=None):
+  if j is None:
+    j = len(data)
+  d = {}
+  i, d['public_exponent'] = parse_dropbear_uint(data, i, j)
+  i, d['modulus'] = parse_dropbear_uint(data, i, j)
+  i, d['private_exponent'] = parse_dropbear_uint(data, i, j)
+  i, d['prime1'] = parse_dropbear_uint(data, i, j)
+  # prime2 is the last number in the file, but we don't need it.
+  # i, d['prime2'] = parse_dropbear_uint(data, i, j)
+  return d
+
+
+bbsshrsa = bb('\0\0\0\7ssh-rsa')  # TODO(pts): Uppercase variable names.
+
+
+def serialize_rsa_dropbear(d, _bbe=bbe, _bbsshrsa=bbsshrsa):
+  return _bbe.join((_bbsshrsa, dropbear_value(d['public_exponent']), dropbear_value(d['modulus']), dropbear_value(d['private_exponent']), dropbear_value(d['prime1']), dropbear_value(d['prime2'])))
+
+
 def convert_rsa_data(d, format='pem', effort=None,
-                     _bbe=bbe, _bb30=bb('\x30'), _bbd=bb('-'), _bb50=bb('\5\0'), _bbbegin=bb('\n-----BEGIN '), _bbend=bb('\n-----END '), _bbnl=bbnl, _bbcolon=bb(':'),
-                     _bbencrypted=bb('ENCRYPTED '), _bbrsapk=bb('RSA PRIVATE KEY-----\n'), _bbpk=bb('PRIVATE KEY-----\n')):
+                     _bbe=bbe, _bbd=bb('-'), _bbsshrsa=bbsshrsa):
   if isinstance(d, bytes):
     data = d
-    if data.startswith(_bbd) or data[:1].isspace():
-      if data.startswith(_bbbegin[1:]):
-        i = len(_bbbegin) - 1
-      else:
-        i = data.find(_bbbegin)  # TODO(pts): Treat \r as \n.
-        if i < 0:
-          raise ValueError('BEGIN not found in pem: %r')
-        i += len(_bbbegin)
-      j = data.find(_bbnl, i + 1)
-      if j < 0:
-        raise ValueError('EOF in pem BEGIN line.')
-      if data[i : i + len(_bbrsapk)] == _bbrsapk:
-        pass
-      elif data[i : i + len(_bbpk)] == _bbpk:
-        pass
-      elif data[i : i + len(_bbencrypted)] == _bbencrypted:
-        raise ValueError('Encrypted pem not supported.')
-      else:
-        raise ValueError('Unsupported pem type: %r' % data[i - len(_bbbegin) + 1 : j])
-      i, j = j, data.find(_bbd, j)
-      if j <= 0:
-        raise ValueError('End of pem not found.')
-      j -= 1
-      if data[j : j + len(_bbend)] != _bbend:
-        raise ValueError('END not found in pem.')
-      data = _bbe.join(data[i : j].replace(_bbnl, _bbe).split())
-      if _bbcolon in data:
-        raise ValueError('Encrypted RSA private key not supported.')
-      # TODO(pts): Check for disallowed characters (e.g. ~) in data.
-      data = binascii.a2b_base64(data)
-    i, j, i0 = parse_rsa_der_header(data)
-    if effort is None or effort >= 2 or format == 'dict':
-      d = parse_rsa_der_numbers(data, i, j)
+    if data.startswith(_bbsshrsa):
+      # Dropbear SSH RSA private key format, output of:
+      # dropbearconvert openssh dropbear id_rsa id_rsa.dropbear
+      d = parse_rsa_dropbear_numbers(data, len(_bbsshrsa))
     else:
-      d, data = None, data[i0 : j]
+      if data.startswith(_bbd) or data[:1].isspace():  # PEM format.
+        data = parse_rsa_pem(data)
+      i, j, i0 = parse_rsa_der_header(data)  # DER format.
+      if effort is None or effort >= 2 or format == 'dict':
+        d = parse_rsa_der_numbers(data, i, j)
+      else:
+        d, data = None, data[i0 : j]
   if isinstance(d, dict):
     if not is_rsa_private_key_complete(d, effort):
       d = get_rsa_private_key(**d)
     if format == 'dict':
       return d
-    d, data = None, get_rsa_der(d)
+    if format == 'dropbear':
+      return serialize_rsa_dropbear(d)
+    d, data = None, serialize_rsa_der(d)
   if not (isinstance(data, bytes) and d is None):
     raise TypeError
   if format == 'der':
@@ -582,63 +648,60 @@ def convert_rsa_data(d, format='pem', effort=None,
   raise ValueError('Unknown RSA data format: %r' % (format,))
 
 
-# ---
-
-# Example 4096-bit key (modulus size).
-d = get_rsa_private_key(
-    modulus=0x00c7e5c2aaa8e9e8be55a16277ab0c60d5249c0996578ae1e63261664c3b08e42ce69af7817255d0c2b3cc640b311e7d76cf1a346839905195045a040c819bd2227300130a1a7ebe78609d69c0170a1362acd57e2a605b035ae9a4904d322621079b1484640269b7a115997ced3a1fb06e7e298ad57746a7395d9b09893e7d63c48f802132cd9c530a80af0d253705dfb1212adae3a29642aeeb18c52103ec8b5a731e65af07a6b1667e385f9208c7e41ef22085f9af955b373ecc96b04b20b24a9f835ec1787b4e5471a459b7ac23a3e8e1ee8c915081a1ee4a55a13c2b077f6c58aa7db1e4badcf670c24ff14c179146e573eb99db77bdf3a83bce808185b194953d5ccc78be03ec7665c6bab34a7fe45bfb306efa8d1e5e9dc2403ef66a1da2cae70b7026c5223782ae28252eac0103715e2e4341b9040d46f886bd198ccd832fddc3b977fa73015535927ed7813f62453722a3e64e3cec779bda447cd2455da608ea227cd35dfc69db9bced50d9c3d826bc8db25d7657a6268084dd8c267e36cc7882df00ae583deab706c558a60509dbfeb4a098c4df466c44bd86e7d28e53480f2c855b7b6688ebd1e1d1c4ae0e61718f114c88e274833dbdb058721d37aa43ff1e0d33dd14fc4463d86f0fe7f32fb438204536f67f25cfc7d85d6eb58e5122533ee69c7eda10f95b1a5217a23c25ef57292b571d60919ee20737cafff09,
-    public_exponent=0x10001,
-    prime1=0x00f0710459cd01a206f4c4dbb8cd591c3f240c887c11bfef21d00cb0b973e4adafb373c1fec279252771e78f0cde980723f97c5457e72648e2eafaea98414eb8448be103e0e276c0a772735e9eacb45e2ac8d03562ea2c72fb1b83c101e6355aae764dff1fcd7f18ea3c8c384052e64cff91a23085d1149d9ed6c7e3bfa1e09735d6ebfeb981ed168c4942f384570c54b07c01e61afc9277a959147715ec17a29fc0a41e4c694813f755ba4f5ba21f221c0ac7d44e499e0856c66c1330b4d32f09e7b4f3bb47f6a564d381872e0d2b1b3c3dc132d31500e7fa7bde2c302a217bedba964d2dbc02d84b47cbe8bafac184963e65b028d9f6fa71b975440d0513aea3)
-assert is_rsa_private_key_complete(d)
-der = convert_rsa_data(d, 'der')
-pem = convert_rsa_data(d, 'pem')
-der2 = convert_rsa_data(d, 'der2')
-pem2 = convert_rsa_data(d, 'pem2')
-assert convert_rsa_data(der, 'der') == der
-assert convert_rsa_data(pem, 'der') == der
-assert convert_rsa_data(der2, 'der') == der
-assert convert_rsa_data(pem2, 'der') == der
-
-open('t.der', 'wb').write(der)
-open('t.pem', 'wb').write(pem)
-open('t2.der', 'wb').write(der2)
-open('t2.pem', 'wb').write(pem2)
+# --- main()
 
 
-public_exponent, private_exponent, prime1, prime2, exponent1, exponent2, coefficient, modulus = (
-    d['public_exponent'], d['private_exponent'], d['prime1'], d['prime2'], d['exponent1'], d['exponent2'], d['coefficient'], d['modulus'])
-# All 256, i.e. about 2048 bits.
-print(len('%x' % prime1) >> 1) 
-print(len('%x' % prime2) >> 1)
-print(len('%x' % exponent1) >> 1)
-print(len('%x' % exponent2) >> 1)
-print(len('%x' % coefficient) >> 1)
+def main(argv):
+  # Example 4096-bit key (modulus size).
+  d = get_rsa_private_key(
+      modulus=0x00c7e5c2aaa8e9e8be55a16277ab0c60d5249c0996578ae1e63261664c3b08e42ce69af7817255d0c2b3cc640b311e7d76cf1a346839905195045a040c819bd2227300130a1a7ebe78609d69c0170a1362acd57e2a605b035ae9a4904d322621079b1484640269b7a115997ced3a1fb06e7e298ad57746a7395d9b09893e7d63c48f802132cd9c530a80af0d253705dfb1212adae3a29642aeeb18c52103ec8b5a731e65af07a6b1667e385f9208c7e41ef22085f9af955b373ecc96b04b20b24a9f835ec1787b4e5471a459b7ac23a3e8e1ee8c915081a1ee4a55a13c2b077f6c58aa7db1e4badcf670c24ff14c179146e573eb99db77bdf3a83bce808185b194953d5ccc78be03ec7665c6bab34a7fe45bfb306efa8d1e5e9dc2403ef66a1da2cae70b7026c5223782ae28252eac0103715e2e4341b9040d46f886bd198ccd832fddc3b977fa73015535927ed7813f62453722a3e64e3cec779bda447cd2455da608ea227cd35dfc69db9bced50d9c3d826bc8db25d7657a6268084dd8c267e36cc7882df00ae583deab706c558a60509dbfeb4a098c4df466c44bd86e7d28e53480f2c855b7b6688ebd1e1d1c4ae0e61718f114c88e274833dbdb058721d37aa43ff1e0d33dd14fc4463d86f0fe7f32fb438204536f67f25cfc7d85d6eb58e5122533ee69c7eda10f95b1a5217a23c25ef57292b571d60919ee20737cafff09,
+      public_exponent=0x10001,
+      prime1=0x00f0710459cd01a206f4c4dbb8cd591c3f240c887c11bfef21d00cb0b973e4adafb373c1fec279252771e78f0cde980723f97c5457e72648e2eafaea98414eb8448be103e0e276c0a772735e9eacb45e2ac8d03562ea2c72fb1b83c101e6355aae764dff1fcd7f18ea3c8c384052e64cff91a23085d1149d9ed6c7e3bfa1e09735d6ebfeb981ed168c4942f384570c54b07c01e61afc9277a959147715ec17a29fc0a41e4c694813f755ba4f5ba21f221c0ac7d44e499e0856c66c1330b4d32f09e7b4f3bb47f6a564d381872e0d2b1b3c3dc132d31500e7fa7bde2c302a217bedba964d2dbc02d84b47cbe8bafac184963e65b028d9f6fa71b975440d0513aea3)
+  assert is_rsa_private_key_complete(d)
+  open('t.der', 'wb').write(der)
+  open('t.pem', 'wb').write(pem)
+  open('t2.der', 'wb').write(der2)
+  open('t2.pem', 'wb').write(pem2)
 
-gcdm = gcd(prime1 - 1, prime2 - 1)
-lcm = (prime1 - 1) * (prime2 - 1) // gcdm
-assert gcd(public_exponent, lcm) == 1
-# Equivalent to private_exponent2 for pow(msg, ..., modulus) purposes.
-private_exponent2 = private_exponent % lcm
-assert 1 <= private_exponent2 < lcm
-assert gcd(private_exponent, lcm) == 1
-#print(gcd(prime1 - 1, prime2 - 1))  # Can be larger than 1.
-assert private_exponent2 == crt2(exponent1, prime1 - 1, exponent2, (prime2 - 1) // gcdm)
-assert private_exponent2 == crt2(exponent1, (prime1 - 1) // gcdm, exponent2, (prime2 - 1))
-print('OK0')
+  public_exponent, private_exponent, prime1, prime2, exponent1, exponent2, coefficient, modulus = (
+      d['public_exponent'], d['private_exponent'], d['prime1'], d['prime2'], d['exponent1'], d['exponent2'], d['coefficient'], d['modulus'])
+  # All 256, i.e. about 2048 bits.
+  print(len('%x' % prime1) >> 1)
+  print(len('%x' % prime2) >> 1)
+  print(len('%x' % exponent1) >> 1)
+  print(len('%x' % exponent2) >> 1)
+  print(len('%x' % coefficient) >> 1)
 
-# Takes a few (10) seconds, depends on random.
-#assert prime1 == recover_rsa_prime1_from_exponents(modulus, private_exponent, public_exponent)
+  gcdm = gcd(prime1 - 1, prime2 - 1)
+  lcm = (prime1 - 1) * (prime2 - 1) // gcdm
+  assert gcd(public_exponent, lcm) == 1
+  # Equivalent to private_exponent2 for pow(msg, ..., modulus) purposes.
+  private_exponent2 = private_exponent % lcm
+  assert 1 <= private_exponent2 < lcm
+  assert gcd(private_exponent, lcm) == 1
+  #print(gcd(prime1 - 1, prime2 - 1))  # Can be larger than 1.
+  assert private_exponent2 == crt2(exponent1, prime1 - 1, exponent2, (prime2 - 1) // gcdm)
+  assert private_exponent2 == crt2(exponent1, (prime1 - 1) // gcdm, exponent2, (prime2 - 1))
+  print('OK0')
 
-print('OK1')
-x = 41
-y = pow(x, private_exponent, modulus)
-mp1 = pow(x, exponent1, prime1)
-mp2 = pow(x, exponent2, prime2)
-y2 = pow(x, private_exponent2, modulus)
-y3 = crt2(mp1, prime1, mp2, prime2)
-y4 = (mp2 + prime2 * coefficient * (mp1 - mp2)) % modulus  # Fastest to compute, because mp1 and mp2 modular exponentiation have small (half-size) modulus.
-assert y == y4
-assert y == y2
-assert y == y3  # True for all x < modulus, even for non-relative-primes.
-assert pow(y, public_exponent, modulus) == x  # True for all x < modulus, even for non-relative-primes.
-print('OK')
+  # Takes a few (10) seconds, depends on random.
+  #assert prime1 == recover_rsa_prime1_from_exponents(modulus, private_exponent, public_exponent)
+
+  print('OK1')
+  x = 41
+  y = pow(x, private_exponent, modulus)
+  mp1 = pow(x, exponent1, prime1)
+  mp2 = pow(x, exponent2, prime2)
+  y2 = pow(x, private_exponent2, modulus)
+  y3 = crt2(mp1, prime1, mp2, prime2)
+  y4 = (mp2 + prime2 * coefficient * (mp1 - mp2)) % modulus  # Fastest to compute, because mp1 and mp2 modular exponentiation have small (half-size) modulus.
+  assert y == y4
+  assert y == y2
+  assert y == y3  # True for all x < modulus, even for non-relative-primes.
+  assert pow(y, public_exponent, modulus) == x  # True for all x < modulus, even for non-relative-primes.
+  print('OK')
+
+
+if __name__ == '__main__':
+  import sys
+  sys.exit(main(sys.argv))
