@@ -222,7 +222,7 @@ def parse_dropbear_uint(data, i, j=None):
   if len(data) < i + size:
     raise ValueError('EOF in dropbear uint.')
   if size > 0 and struct.unpack('>B', data[i : i + 1])[0] >= 0x80:
-    raise ValueError('Negative der uint.')
+    raise ValueError('Negative dropbox uint.')
   return i + size, uint_from_be(data[i : i + size])
 
 
