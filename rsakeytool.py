@@ -411,7 +411,7 @@ def get_rsa_private_key(**kwargs):
   if prime1 <= prime2:
     if prime1 == prime2:
       raise ValueError('Primes must not be equal.')
-    prime1, prime2 = prime1, prime2
+    prime1, prime2 = prime2, prime1
   # True but slow: assert prime1 > prime2
   if prime1 < 3 or prime2 < 2:
     raise ValueError('Primes are too small.')
