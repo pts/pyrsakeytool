@@ -760,6 +760,8 @@ def convert_rsa_data(d, format='pem', effort=None,
     elif has_hexa_header(data, 0):
       d = parse_rsa_hexa(data, 0)
     else:
+      # TODO(pts): Add support for RSA private keys in GPG `gpg
+      # --export-secret-keys', selected by key ID.
       if data.startswith(_bbd) or data[:1].isspace():  # PEM or hexa format.
         data = parse_rsa_pem(data)
       if isinstance(data, dict):
@@ -861,7 +863,70 @@ def quick_test():
 
 
 def main(argv):
-  quick_test()
+  import sys
+  if len(argv) > 1 and argv[1] == '--quick-test':
+    quick_test()
+    return
+  if len(argv) < 2 or argv[1] in ('--help', '-help') or (len(argv) > 2 and argv[1] == 'rsa' and argv[2] in ('--help', '-help')):
+    sys.stderr.write(
+        'rsakeytool.py: Convert between various RSA private key formats.\n'
+        'This is free software, GNU GPL >=2.0. '
+        'There is NO WARRANTY. Use at your risk.\n'
+        'Usage: %s rsa [<flag> ...]\n'
+        'Flags:\n'
+        '-in <input-filename>\n'
+        '-out <output-filename>\n'
+        '-outform <output-format>: Any of der, pem, der2, pem2, msblob, dropbear, hexa.\n'
+        .replace('%s', argv[0]))
+    sys.exit(1)
+  i = 1
+  if argv[1] == 'rsa':  # Compatible with `openssl rsa ...'.
+    #sys.stderr.write('fatal: specify rsa as first argument\n')
+    #sys.exit(1)
+    i += 1
+
+  infn = outfn = format = None
+  while i < len(argv):
+    arg = argv[i]
+    i += 1
+    if arg not in ('-in', '-out', '-outform'):
+      sys.stderr.write('fatal: unknown flag (use --help): %s' % arg)
+      sys.exit(1)
+    if i == len(argv):
+      sys.stderr.write('fatal: missing argument for flag: %s' % arg)
+      sys.exit(1)
+    value = argv[i]
+    i += 1
+    if arg == '-in':
+      infn = value
+    elif arg == '-out':
+      outfn = value
+    elif arg == '-outform':
+      if value == 'dict':
+        sys.stderr.write('fatal: -outform dict not supported on the command-line')
+        sys.exit(1)
+      format = value
+  if infn is None:
+    sys.stderr.write('fatal: missing -in ...')
+    sys.exit(1)
+  if outfn is None:
+    sys.stderr.write('fatal: missing -out ...')
+    sys.exit(1)
+  if format is None:
+    sys.stderr.write('fatal: missing -outform ...')
+    sys.exit(1)
+
+  f = open(infn, 'rb')
+  try:
+    data = f.read()  # TODO(pts): Limit to 1 MiB etc., but not for gpg(1).
+  finally:
+    f.close()
+  data = convert_rsa_data(data, format)
+  f = open(outfn, 'wb')
+  try:
+    f.write(data)
+  finally:
+    f.close()
 
 
 if __name__ == '__main__':
