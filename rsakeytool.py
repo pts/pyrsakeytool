@@ -598,7 +598,6 @@ assert convert_rsa_data(der, 'der') == der
 assert convert_rsa_data(pem, 'der') == der
 assert convert_rsa_data(der2, 'der') == der
 assert convert_rsa_data(pem2, 'der') == der
-#!!parse der to d.
 
 open('t.der', 'wb').write(der)
 open('t.pem', 'wb').write(pem)
@@ -625,22 +624,8 @@ assert gcd(private_exponent, lcm) == 1
 #print(gcd(prime1 - 1, prime2 - 1))  # Can be larger than 1.
 assert private_exponent2 == crt2(exponent1, prime1 - 1, exponent2, (prime2 - 1) // gcdm)
 assert private_exponent2 == crt2(exponent1, (prime1 - 1) // gcdm, exponent2, (prime2 - 1))
-
-
-
-
-#@0 30820942: d=0 hl=4 l=2370=0x0942 cons/SEQUENCE
-#  @4 0201: d=1 hl=2 l=1 prim/INTEGER zero
-#    00: INTEGER data prefix
-#  @7 300D: d=1 hl=2 l=13 cons/SEQUENCE
-#    @9 0609: d=2 hl=2 l=9 prim/OBJECT rsaEncryption
-#      2A864886F70D010101: ASN.1 OID (object identifier) 1.2.840.113549.1.1.1 == {iso(1) member-body(2) us(840) rsadsi(113549) pkcs(1) pkcs-1(1) rsaEncryption(1)} http://oid-info.com/get/1.2.840.113549.1.1.1
-#    @20 0500: d=2 hl=2 l=0 prim/NULL
-#  @22 0482092C: d=1 hl=4 l=2348=0x092c prim/OCTET_STRING
-#    30820928...B2C1362A: PRKINTS data (same as above)
-
-
 print('OK0')
+
 # Takes a few (10) seconds, depends on random.
 #assert prime1 == recover_rsa_prime1_from_exponents(modulus, private_exponent, public_exponent)
 
