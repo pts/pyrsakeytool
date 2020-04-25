@@ -223,15 +223,17 @@ def uint_to_any_msb(value, is_low=False):
     return binascii.unhexlify(value)
 
 
-def der_field(xtype, *args):
+def der_field(xtype, args):
   output = [b'', b'']
+  if isinstance(args, bytes):
+    args = (args,)
+  elif not isinstance(args, (tuple, list)):
+    args = tuple(args)
+  size = sum(len(arg) for arg in args)
   for arg in args:
-    if isinstance(arg, (int, long)):
-      arg = der_field(2, uint_to_any_msb(arg, is_low=True))
-    elif not isinstance(arg, bytes):
-      raise TypeError('Bad DER data type: %s' % type(arg))
+    if not isinstance(arg, bytes):
+      raise TypeError
     output.append(arg)
-  size = sum(len(arg) for arg in output)
   # https://github.com/etingof/pyasn1/blob/db8f1a7930c6b5826357646746337dafc983f953/pyasn1/codec/ber/encoder.py#L53
   if size < 0x80:
     output[0] = struct.pack('>BB', xtype, size)
@@ -243,13 +245,95 @@ def der_field(xtype, *args):
   return b''.join(output)
 
 
-def der_sequence(*args):
-  return der_field(0x30, *args)
+def der_oid(value):
+  # https://github.com/etingof/pyasn1/blob/db8f1a7930c6b5826357646746337dafc983f953/pyasn1/codec/ber/encoder.py#L296
+  value = map(int, value.split('.'))
+  if len(value) < 2:
+    raise ValueError('OID too short.')
+  if [1 for item in value if item < 0]:
+    raise ValueError('Negative value in OID.')
+  if value[0] > 2:
+    raise ValueError('Bad value[0] in OID.')
+  if ((value[0] in (0, 1) and value[1] >= 40) or 
+       value[0] == 2 and value[1] > 175):
+    raise ValueError('Bad value[1] in OID.')
+  output = [struct.pack('>B', value[0] * 40 + value[1])]
+  for item in value[2:]:
+    if item < 0x80:
+      output.append(struct.pack('>B', item))
+    else:
+      xs = []
+      while item:
+        xs.append(0x80 | item & 0x7f)
+        item >>= 7
+      xs[0] &= 0x7f
+      while xs:
+        output.append(struct.pack('>B', xs.pop()))
+  return der_field(6, output)
+
+
+assert binascii.hexlify(der_oid('1.2.840.113549.1.1.1')) == '06092a864886f70d010101'
+
+
+def der_bytes(value):
+  return der_field(4, value)
+
+
+def der_value(value):
+  if isinstance(value, (int, long)):
+    return der_field(2, uint_to_any_msb(value, is_low=True),)
+  elif isinstance(value, tuple):
+    return der_field(0x30, map(der_value, value))
+  elif isinstance(value, bytes):
+    return value
+  elif value is None:
+    return b'\5\0'
+  else:
+    raise TypeError('Bad DER data type: %s' % type(value))
+
+
+def base64_encode(data):
+  data = binascii.b2a_base64(data).rstrip(b'\n')
+  if not isinstance(data, bytes):
+    raise TypeError
+  output, i = [], 0
+  while i < len(data):
+    output.append(data[i : i + 64])  # base64.encodestring uses 76.
+    i += 64
+  return b'\n'.join(output)
 
 
 #print binascii.hexlify(data)
-data = der_sequence(0, modulus, public_exponent, private_exponent, prime1, prime2, exponent1, exponent2, coefficient)
+data = der_value((0, modulus, public_exponent, private_exponent, prime1, prime2, exponent1, exponent2, coefficient))
 open('t.der', 'wb').write(data)
+# !! binascii.b2a_base64
+open('t.pem', 'wb').write(
+    b'-----BEGIN RSA PRIVATE KEY-----\n%s\n-----END RSA PRIVATE KEY-----\n' % base64_encode(data))
+
+OID_RSA_ENCRYPTION = '1.2.840.113549.1.1.1'  # rsaEncryption.
+data2 = der_value((0, (der_oid(OID_RSA_ENCRYPTION), None), der_bytes(data)))
+open('t2.der', 'wb').write(data2)
+open('t2.pem', 'wb').write(
+    b'-----BEGIN PRIVATE KEY-----\n%s\n-----END PRIVATE KEY-----\n' % base64_encode(data2))
+
+
+#@0 30820942: d=0 hl=4 l=2370=0x0942 cons/SEQUENCE
+#  @4 0201: d=1 hl=2 l=1 prim/INTEGER zero
+#    00: INTEGER data prefix
+#  @7 300D: d=1 hl=2 l=13 cons/SEQUENCE
+#    @9 0609: d=2 hl=2 l=9 prim/OBJECT rsaEncryption
+#      2A864886F70D010101: ASN.1 OID (object identifier) 1.2.840.113549.1.1.1 == {iso(1) member-body(2) us(840) rsadsi(113549) pkcs(1) pkcs-1(1) rsaEncryption(1)} http://oid-info.com/get/1.2.840.113549.1.1.1
+#        * 2A: 1.2: 40 * 1 + 2
+#        * 8648: MSB-varint of 840 (14 bits)
+#        * 86F70D: MSB-varint of 113549 (21 bits)
+#        * 01: MSB-varint of 1 (7 bits)
+#        * 01: MSB-varint of 1 (7 bits)
+#        * 01: MSB-varint of 1 (7 bits)
+#        eqivalent to: {joint-iso-itu-t(2) ds(5) algorithm(8) encryptionAlgorithm(1) rsa(1)} 2.5.8.1.1 == 55080101
+#    @20 0500: d=2 hl=2 l=0 prim/NULL
+#  @22 0482092C: d=1 hl=4 l=2348=0x092c prim/OCTET_STRING
+#    30820928...B2C1362A: PRKINTS data (same as above)
+
 
 print 'OK0'
 # Takes a few (10) seconds, depends on random.
