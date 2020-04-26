@@ -102,8 +102,12 @@ class RsakeytoolTest(unittest.TestCase):
     self.assertEqual(dd, convert_rsa_data(d, 'dict'))
     self.assertEqual(dd, convert_rsa_data(dd, 'dict'))
     self.assertEqual(dd, convert_rsa_data({'e': 5, 'd': 493, 'n': 0x29B}, 'dict'))
+    dd2 = dict(dd, private_exponent=dd['private_exponent'] - 308)
+    d2 = dict(d, private_exponent=dd2['private_exponent'])
+    self.assertEqual(dd2, convert_rsa_data(d2, 'dict'))
+    self.assertEqual(dd2, convert_rsa_data(dd2, 'dict'))
     self.assertEqual(bb('modulus = 0x29b\npublic_exponent = 0x5\nprivate_exponent = 0x1ed\nprime1 = 0x1d\nprime2 = 0x17\nexponent1 = 0x11\nexponent2 = 0x9\ncoefficient = 0x18\n'),
-                     convert_rsa_data(d, 'hexa'))
+                     convert_rsa_data(dd, 'hexa'))
     hexa_data = bb('n  = 0x29b\npublic_exponent   =5\nprivate_exponent\t\r=\n0x1Ed\nprime1 = 0x1d\nprime2 = 23\nexponent1 = 0x11\nexponent2 = 0x9\ncoefficient = 0X18\n')
     self.assertEqual(dd, convert_rsa_data(bb(' \t\r\n  ') + hexa_data, 'dict'))
     self.assertEqual(dd, convert_rsa_data(hexa_data, 'dict'))

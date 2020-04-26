@@ -428,6 +428,7 @@ def get_rsa_private_key(**kwargs):
   if coefficient is None:
     raise ValueError('Primes are not coprimes.')
   pp1 = (prime1 - 1) * (prime2 - 1)
+  lcm = pp1 // gcd(prime1 - 1, prime2 - 1)
   if ec < 1:
     raise ValueError('Needed at least 1 of private_exponent, public_exponent.')
   if not 0 <= private_exponent < pp1:
@@ -435,16 +436,21 @@ def get_rsa_private_key(**kwargs):
   if not 0 <= public_exponent < pp1:
     raise ValueError('Bad public_exponent.')
   if not private_exponent:
+    # lcm instead of pp1 would also work, but produce different value.
     private_exponent = modinv(public_exponent, pp1)
   elif not public_exponent:
+    # lcm instead of pp1 would also work, but produce different value.
     public_exponent = modinv(private_exponent, pp1)
-  elif private_exponent * public_exponent % pp1 != 1:
+  if private_exponent * public_exponent % lcm != 1:
+    # Please note that it's OK that private_exponent * public_exponent % pp1 != 1.
+    # Some GPG RSA keys are like this.
     raise ValueError('Mismatch in private_exponent vs public_exponent.')
-  lcm = pp1 // gcd(prime1 - 1, prime2 - 1)
-  if gcd(public_exponent, lcm) != 1:
-    raise ValueError('Mismatch in public_exponent vs primes.')
-  if gcd(private_exponent, lcm) != 1:
-    raise ValueError('Mismatch in private_exponent vs primes.')
+  # These checks follow from `private_exponent * public_exponent % lcm == 1'.
+  #if gcd(public_exponent, lcm) != 1:
+  #  raise ValueError('Mismatch in public_exponent vs primes.')
+  #if gcd(private_exponent, lcm) != 1:
+  #  raise ValueError('Mismatch in private_exponent vs primes.')
+  #
   # OpenPGP RSA private key:
   # https://tools.ietf.org/html/draft-ietf-openpgp-rfc4880bis-09#section-5.6
   # * modulus: (public) MPI of RSA public modulus n;
@@ -499,14 +505,12 @@ def is_rsa_private_key_complete(d, effort=None):
         coefficient = None
       if not (
           d['coefficient'] == coefficient and
-          d['private_exponent'] * d['public_exponent'] % pp1 == 1 and
           d['exponent1'] == d['private_exponent'] % pm1,
           d['exponent2'] == d['private_exponent'] % pm2):
         return False
       if effort >= 4:
         lcm = pp1 // gcd(pm1, pm2)
-        if not (gcd(d['public_exponent'], lcm) == 1 and
-                gcd(d['private_exponent'], lcm) == 1):
+        if d['private_exponent'] * d['public_exponent'] % lcm != 1:
           return False
         # With `if effort >= 5' we could check that prime1 and prime2 are
         # primes.
