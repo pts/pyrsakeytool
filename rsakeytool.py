@@ -56,7 +56,7 @@ def uint_to_any_be(value, is_low=False,
   else:
     try:
       value = _bbpx % value
-    except TypeError:  # Python 3.1.
+    except TypeError:  # Python 3.0--3.4.
       value = bytes(hex(value), 'ascii')[2:]
     if len(value) & 1:
       value = _bb0 + value
@@ -744,7 +744,7 @@ def parse_rsa_hexa(data, i, _bbu=bb('_'), _bbeq=bb('=')):
   return d
 
 
-def serialize_rsa_hexa(d, _bbassign=bb(' = '), _bb0x=bb('0x'), _bbnl=bbnl, _bbe=bbe, _bbpx=bb('%x')):
+def serialize_rsa_hexa(d, _bbassign=bb(' = '), _bb0x=bb('0x'), _bbnl=bbnl, _bbe=bbe, _bbpx=bb('%x'), _bb0=bb('0')):
   """Serializes hexa: hexadecimal assignment."""
   output = []
   for key in HEXA_KEYS:
@@ -753,11 +753,18 @@ def serialize_rsa_hexa(d, _bbassign=bb(' = '), _bb0x=bb('0x'), _bbnl=bbnl, _bbe=
     output.append(_bbassign)
     try:
       value = _bbpx % value
-    except TypeError:  # Python 3.1.
-      output.append(bytes(hex(value), 'ascii'))
+    except TypeError:  # Python 3.0--3.4.
+      value = bytes(hex(value), 'ascii')
+      if len(value) & 1:
+        output.append(_bb0x)
+        output.append(_bb0)
+        value = value[2:]
+      output.append(value)
       value = ()
     if value:
       output.append(_bb0x)
+      if len(value) & 1:
+        output.append(_bb0)
       output.append(value)
     output.append(_bbnl)
   return _bbe.join(output)
