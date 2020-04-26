@@ -573,7 +573,7 @@ DER2_RSA_SEQUENCE_DATA = DER_OID_RSA_ENCRYPTION + der_value(None)
 
 def parse_rsa_der_header(data, i=0, _bb30=bb('\x30')):
   if data[i : i + 1] != _bb30:
-    raise ValueError('Expected der or pem input.')
+    raise ValueError('Expected der input.')
   i0 = i
   i, size = parse_der_sequence_header(data, i)
   j = i + size
@@ -848,7 +848,7 @@ def serialize_rsa_gpg22(d, _bbe=bbe, _bbgpg22=bbgpg22, _bbgpg22close=bb(')))')):
 
 
 def convert_rsa_data(d, format='pem', effort=None,
-                     _bbe=bbe, _bbd=bb('-'), _bbsshrsa=bbsshrsa, _bbmsblob=bbmsblob, _bbgpg22=bbgpg22, _bbgpg22prot=bbgpg22prot):
+                     _bbe=bbe, _bbd=bb('-'), _bb30=bb('\x30'), _bbsshrsa=bbsshrsa, _bbmsblob=bbmsblob, _bbgpg22=bbgpg22, _bbgpg22prot=bbgpg22prot):
   if isinstance(d, bytes):
     data = d
     if data.startswith(_bbsshrsa):
@@ -870,6 +870,8 @@ def convert_rsa_data(d, format='pem', effort=None,
       # --export-secret-keys', selected by key ID.
       if data.startswith(_bbd) or data[:1].isspace():  # PEM or hexa format.
         data = parse_rsa_pem(data)
+      elif data[:1] != _bb30:
+        raise ValueError('Unknown RSA private key input format.')
       if isinstance(data, dict):
         d, data = data, None
       else:
