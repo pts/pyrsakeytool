@@ -1,8 +1,8 @@
 rsakeytool.py: Convert between various RSA private key formats
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 rsakeytool.py is a command-line tool written in Python to convert between
-various RSA private key formats (e.g. PEM, DER, Microsoft, Dropbear). The
-command-line interface is compatible with of `openssl rsa ...'.
+various RSA private key formats (e.g. PEM, DER, Microsoft, Dropbear, GPG 2.2
+.key). The command-line interface is compatible with of `openssl rsa ...'.
 
 Extra features over `openssl rsa ...':
 
@@ -27,9 +27,10 @@ rsakeytool.py works with any version of Python >= 2.4. It has been
 tested with 2.4, 2.7, 3.0 and 3.8. rsakeytool.py uses only a few standard
 Python modules, it doesn't need any extensions (e.g. pyasn1 or PyCrypto).
 
-FYI PEM is the key file format of web servers (for https://) and OpenSSH.
-PEM is an ASCII (with base64) format. DER is the eqivalent binary format.
-Both of these formats serialize values using ASN.1.
+FYI PEM is the private key file format used by web servers (for https://)
+and OpenSSH (~/.ssh/id_rsa). PEM is an ASCII (with base64) format. DER is
+the eqivalent binary format. Both of these formats serialize values using
+ASN.1.
 
 Example usage for dumping hex integer values to stdout:
 

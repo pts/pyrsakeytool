@@ -253,6 +253,37 @@ def parse_msblob_uint(data, i, j, size):
   return i + size, uint_from_be(data[i + size - 1 : i - 1 : -1])
 
 
+# --- GPG 2.2 private key format.
+
+
+def parse_gpg22_bytes(data, i, j=None, what='data', _bbcolon=bb(':')):
+  if j is not None and i >= j:
+    raise ValueError('EOF in size-limited gpg22 %s size.' % what)
+  if i >= len(data):
+    raise ValueError('EOF in gpg22 %s size.' % what)
+  i0 = i
+  while i < j and i < len(data) and data[i : i + 1].isdigit():
+    i += 1
+  if not (i < j and i < len(data) and data[i : i + 1] == _bbcolon):
+    raise ValueError('Expected colon after gpg22 %s size.' % what)
+  if i0 == i:
+    raise ValueError('Empty gpg22 %s size.' % what)
+  size = int(data[i0 : i])
+  i += 1
+  if j is not None and j < i + size:
+    raise ValueError('EOF in size-limited gpg22 %s.' % what)
+  if len(data) < i + size:
+    raise ValueError('EOF in gpg22 %s.' % what)
+  return i + size, i
+
+
+def parse_gpg22_uint(data, i, j=None):
+  i, i0 = parse_gpg22_bytes(data, i, j, 'uint')
+  if i > i0 and struct.unpack('>B', data[i0 : i0 + 1])[0] >= 0x80:
+    raise ValueError('Negative gpg22 uint.')
+  return i, uint_from_be(data[i0 : i])
+
+
 # --- RSA calculations.
 
 
@@ -595,7 +626,7 @@ def parse_rsa_pem(data,
   elif data[i : i + len(_bbpk)] == _bbpk:
     pass
   elif data[i : i + len(_bbencrypted)] == _bbencrypted:
-    raise ValueError('Encrypted pem not supported.')
+    raise ValueError('Encrypted (passphrase-protected) pem not supported.')
   else:
     raise ValueError('Unsupported pem type: %r' % data[i - len(_bbbegin) + 1 : j])
   i, j = j, data.find(_bbd, j)
@@ -606,7 +637,7 @@ def parse_rsa_pem(data,
     raise ValueError('END not found in pem.')
   data = _bbe.join(data[i : j].replace(_bbnl, _bbe).split())
   if _bbcolon in data:
-    raise ValueError('Encrypted RSA private key not supported.')
+    raise ValueError('Encrypted (passphrase-protected) RSA private key not supported.')
   # TODO(pts): Check for disallowed characters (e.g. ~) in data.
   return binascii.a2b_base64(data)
 
@@ -751,8 +782,66 @@ def parse_rsa_msblob_numbers(data, i=0, j=None):
   return d
 
 
+GPG22_RSA_KEYS = bb('nedpqu')
+
+
+def parse_rsa_gpg22_numbers(data, i=0, j=None, _bbop=bb('('), _bbcp=bb(')'), _bbu=bb('_'), _bbkeys=GPG22_RSA_KEYS):
+  if j is None:
+    j = len(data)
+  d = {}
+  while 1:
+    c = data[i : i + 1]
+    if c == _bbcp:
+      break
+    elif c != _bbop:
+      if not c:
+        raise ValueError('EOF in GPG 2.2 entry start.')
+      raise ValueError('Paren expected in GPG 2.2 entry, got: %r' % c)
+    i += 1
+    i, i0 = parse_gpg22_bytes(data, i, j, 'key')
+    key = data[i0 : i]
+    if len(key) != 1 or key not in _bbkeys:
+      raise ValueError('Bad GPG 2.2 key: %r' % key)
+    key = aa(key)
+    i, value = parse_gpg22_uint(data, i, j)
+    if not (i < j and i < len(data) and data[i : i + 1] == _bbcp):
+      raise ValueError('Close paren expected in GPG 2.2 entry.')
+    i += 1
+    d[key] = value
+  # Typically d has all of GPG22_RSA_KEYS now, but get_rsa_private_key will
+  # raise an exception if it doesn't.
+  return d
+
+
+# Format used by GPG 2.2.
+# ~/.gnupg/private-keys-v1.d/*.key
+# See the GPG 2.3 format at https://lists.gnupg.org/pipermail/gnupg-devel/2017-December/033295.html
+bbgpg22 = bb('(11:private-key(3:rsa(')
+bbgpg22prot = bb('(21:protected-private-key(3:rsa(')
+
+
+def append_gpg22_uint(output, prefix, value, _bbcolon=bb(':')):
+  output.append(prefix)
+  data = uint_to_any_be(value, True)
+  output.append(bb(str(len(data))))
+  output.append(_bbcolon)
+  output.append(data)
+
+
+def serialize_rsa_gpg22(d, _bbe=bbe, _bbgpg22=bbgpg22, _bbgpg22close=bb(')))')):
+  output = [_bbgpg22]
+  append_gpg22_uint(output, bb('1:n'), d['modulus'])
+  append_gpg22_uint(output, bb(')(1:e'), d['public_exponent'])
+  append_gpg22_uint(output, bb(')(1:d'), d['private_exponent'])
+  append_gpg22_uint(output, bb(')(1:p'), d['prime2'])
+  append_gpg22_uint(output, bb(')(1:q'), d['prime1'])
+  append_gpg22_uint(output, bb(')(1:u'), d['coefficient'])
+  output.append(_bbgpg22close)
+  return _bbe.join(output)
+
+
 def convert_rsa_data(d, format='pem', effort=None,
-                     _bbe=bbe, _bbd=bb('-'), _bbsshrsa=bbsshrsa, _bbmsblob=bbmsblob):
+                     _bbe=bbe, _bbd=bb('-'), _bbsshrsa=bbsshrsa, _bbmsblob=bbmsblob, _bbgpg22=bbgpg22, _bbgpg22prot=bbgpg22prot):
   if isinstance(d, bytes):
     data = d
     if data.startswith(_bbsshrsa):
@@ -763,6 +852,10 @@ def convert_rsa_data(d, format='pem', effort=None,
       # Microsoft SSH RSA private key format, output of:
       # openssl rsa -outform msblob -in key.pem -out key.msblob
       d = parse_rsa_msblob_numbers(data, len(_bbmsblob))
+    elif data.startswith(_bbgpg22):
+      d = parse_rsa_gpg22_numbers(data, len(_bbgpg22) - 1)
+    elif data.startswith(_bbgpg22prot):
+      raise ValueError('Encrypted (passphrase-protected) GPG 2.2 key not supported.')
     elif has_hexa_header(data, 0):
       d = parse_rsa_hexa(data, 0)
     else:
@@ -789,6 +882,8 @@ def convert_rsa_data(d, format='pem', effort=None,
       return serialize_rsa_msblob(d)
     if format == 'hexa':
       return serialize_rsa_hexa(d)
+    if format in 'gpg22':
+      return serialize_rsa_gpg22(d)
     d, data = None, serialize_rsa_der(d)
   if not (isinstance(data, bytes) and d is None):
     raise TypeError
@@ -822,6 +917,7 @@ def quick_test():
   open('t.dropbear', 'wb').write(convert_rsa_data(d, 'dropbear'))
   open('t.msblob', 'wb').write(convert_rsa_data(d, 'msblob'))
   open('t.hexa', 'wb').write(convert_rsa_data(d, 'hexa'))
+  open('t.gpg22', 'wb').write(convert_rsa_data(d, 'gpg22'))
 
   public_exponent, private_exponent, prime1, prime2, exponent1, exponent2, coefficient, modulus = (
       d['public_exponent'], d['private_exponent'], d['prime1'], d['prime2'], d['exponent1'], d['exponent2'], d['coefficient'], d['modulus'])
@@ -883,7 +979,7 @@ def main(argv):
         '-dump\n'
         '-in <input-filename>\n'
         '-out <output-filename>\n'
-        '-outform <output-format>: Any of der, pem (default), der2, pem2, msblob, dropbear, hexa.\n'
+        '-outform <output-format>: Any of der, pem (default), der2, pem2, msblob, dropbear, hexa, gpg22.\n'
         '-inform <input-format>; Ignored. Autodetected instead.\n'
         .replace('%s', argv[0]))
     sys.exit(1)
