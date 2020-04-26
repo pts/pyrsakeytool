@@ -11,9 +11,11 @@ Extra features over `openssl rsa ...':
 * rsakeytool.py autodetects the input file format.
 * rsakeytool.py can calculate some missing fields (e.g. if 2 of
   (modulus, prime1, prime2) is known, the 3rd one is calculated).
-* rsakeytool.py supports PEM `-----BEGIN PRIVATE KEY-----' output conveniently
-  with the `-outform pem2' flag. The default is PEM
-  ``-----BEGIN RSA PRIVATE KEY-----', matching the `openssl rsa' default.
+* rsakeytool.py supports
+  PEM `-----BEGIN PRIVATE KEY-----' (`openssl genpkey') output conveniently
+  with the `-outform pem2' flag. The default is
+  PEM ``-----BEGIN RSA PRIVATE KEY-----' (`openssl genrsa'), matching the
+  `openssl rsa' default.
 
 Missing features:
 
