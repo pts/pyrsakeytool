@@ -2,7 +2,8 @@ rsakeytool.py: Convert between various RSA private key formats
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 rsakeytool.py is a command-line tool written in Python to convert between
 various RSA private key formats (e.g. PEM, DER, Microsoft, Dropbear, GPG 2.2
-.key). The command-line interface is compatible with of `openssl rsa ...'.
+.key, GPG 2.3 .key). The command-line interface is compatible with of
+`openssl rsa ...'.
 
 Extra features over `openssl rsa ...':
 

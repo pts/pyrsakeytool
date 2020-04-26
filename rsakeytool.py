@@ -47,11 +47,11 @@ bbnl = bb('\n')
 bbz = bb('\0')
 
 
-def uint_to_any_be(value, is_low=False,
+def uint_to_any_be(value, is_low=False, is_hex=False,
                     _bbz=bbz, _bb0=bb('0'), _bb8=bb('8'), _bb00=bb('00'), _bbpx=bb('%x')):
   if value < 0:
     raise ValueError('Bad negative uint.')
-  if not is_low and value <= 0xffffffffffffffff:
+  if not (is_low or is_hex) and value <= 0xffffffffffffffff:
     return struct.pack('>Q', value).lstrip(_bbz) or _bbz
   else:
     try:
@@ -62,6 +62,8 @@ def uint_to_any_be(value, is_low=False,
       value = _bb0 + value
     elif is_low and not _bb0 <= value[:1] < _bb8:
       value = _bb00 + value
+    if is_hex:
+      return value
     return binascii.unhexlify(value)
 
 
@@ -282,6 +284,48 @@ def parse_gpg22_uint(data, i, j=None):
   if i > i0 and struct.unpack('>B', data[i0 : i0 + 1])[0] >= 0x80:
     raise ValueError('Negative gpg22 uint.')
   return i, uint_from_be(data[i0 : i])
+
+
+def append_gpg22_uint(output, prefix, value, _bbcolon=bb(':')):
+  output.append(prefix)
+  data = uint_to_any_be(value, True)
+  output.append(bb(str(len(data))))
+  output.append(_bbcolon)
+  output.append(data)
+
+
+# --- GPG 2.3 private key format.
+
+
+def gpg23_uint(value):
+  return uint_to_any_be(value, True, is_hex=True).upper()
+
+
+def parse_gpg23_uint(data, i, j, _bbhash=bb('#')):
+  mj = min(j, len(data))
+  if i >= mj:
+    raise ValueError('EOF in gpg23 uint start.')
+  if not (i < mj and data[i : i + 1] == _bbhash):
+    raise ValueError('Bad gpg23 uint start.')
+  i += 1
+  if i >= mj:
+    raise ValueError('EOF in gpg23 uint value start.')
+  if struct.unpack('>B', data[i : i + 1])[0] >= 0x80:
+    raise ValueError('Negative gpg23 uint.')
+  i0 = i
+  while i < mj and data[i : i + 1] != _bbhash:
+    i += 1
+  if i >= mj:
+    raise ValueError('EOF in gpg23 uint.')
+  if (i - i0) & 1:
+    raise ValueError('Odd gpg23 uint size.')
+  try:
+    value = int(data[i0 : i], 16)
+  except ValueError:
+    value = None
+  if value is None:
+    raise ValueError('Bad gpg23 uint value.')
+  return i + 1, value
 
 
 # --- RSA calculations.
@@ -626,7 +670,7 @@ def parse_rsa_pem(data,
   elif data[i : i + len(_bbpk)] == _bbpk:
     pass
   elif data[i : i + len(_bbencrypted)] == _bbencrypted:
-    raise ValueError('Encrypted (passphrase-protected) pem not supported.')
+    raise ValueError('Encrypted (passphrase-protected) pem key not supported.')
   else:
     raise ValueError('Unsupported pem type: %r' % data[i - len(_bbbegin) + 1 : j])
   i, j = j, data.find(_bbd, j)
@@ -637,7 +681,7 @@ def parse_rsa_pem(data,
     raise ValueError('END not found in pem.')
   data = _bbe.join(data[i : j].replace(_bbnl, _bbe).split())
   if _bbcolon in data:
-    raise ValueError('Encrypted (passphrase-protected) RSA private key not supported.')
+    raise ValueError('Encrypted (passphrase-protected) pem key (in data) not supported.')
   # TODO(pts): Check for disallowed characters (e.g. ~) in data.
   return binascii.a2b_base64(data)
 
@@ -789,10 +833,10 @@ def parse_rsa_msblob_numbers(data, i=0, j=None):
   return d
 
 
-GPG22_RSA_KEYS = bb('nedpqu')
+GPG_RSA_KEYS = bb('nedpqu')
 
 
-def parse_rsa_gpg22_numbers(data, i=0, j=None, _bbop=bb('('), _bbcp=bb(')'), _bbu=bb('_'), _bbkeys=GPG22_RSA_KEYS):
+def parse_rsa_gpg22_numbers(data, i=0, j=None, _bbop=bb('('), _bbcp=bb(')'), _bbu=bb('_'), _bbkeys=GPG_RSA_KEYS):
   if j is None:
     j = len(data)
   d = {}
@@ -802,37 +846,28 @@ def parse_rsa_gpg22_numbers(data, i=0, j=None, _bbop=bb('('), _bbcp=bb(')'), _bb
       break
     elif c != _bbop:
       if not c:
-        raise ValueError('EOF in GPG 2.2 entry start.')
-      raise ValueError('Paren expected in GPG 2.2 entry, got: %r' % c)
+        raise ValueError('EOF in gpg22 entry start.')
+      raise ValueError('Paren expected in gpg22 entry, got: %r' % c)
     i += 1
     i, i0 = parse_gpg22_bytes(data, i, j, 'key')
     key = data[i0 : i]
     if len(key) != 1 or key not in _bbkeys:
-      raise ValueError('Bad GPG 2.2 key: %r' % key)
+      raise ValueError('Bad gpg22 key: %r' % key)
     key = aa(key)
     i, value = parse_gpg22_uint(data, i, j)
     if not (i < j and i < len(data) and data[i : i + 1] == _bbcp):
-      raise ValueError('Close paren expected in GPG 2.2 entry.')
+      raise ValueError('Close paren expected in gpg22 entry.')
     i += 1
     d[key] = value
-  # Typically d has all of GPG22_RSA_KEYS now, but get_rsa_private_key will
+  # Typically d has all of GPG_RSA_KEYS now, but get_rsa_private_key will
   # raise an exception if it doesn't.
   return d
 
 
 # Format used by GPG 2.2.
 # ~/.gnupg/private-keys-v1.d/*.key
-# See the GPG 2.3 format at https://lists.gnupg.org/pipermail/gnupg-devel/2017-December/033295.html
 bbgpg22 = bb('(11:private-key(3:rsa(')
-bbgpg22prot = bb('(21:protected-private-key(3:rsa(')
-
-
-def append_gpg22_uint(output, prefix, value, _bbcolon=bb(':')):
-  output.append(prefix)
-  data = uint_to_any_be(value, True)
-  output.append(bb(str(len(data))))
-  output.append(_bbcolon)
-  output.append(data)
+bbgpg22prot = bb('(21:protected-private-key(')
 
 
 def serialize_rsa_gpg22(d, _bbe=bbe, _bbgpg22=bbgpg22, _bbgpg22close=bb(')))')):
@@ -845,6 +880,94 @@ def serialize_rsa_gpg22(d, _bbe=bbe, _bbgpg22=bbgpg22, _bbgpg22close=bb(')))')):
   append_gpg22_uint(output, bb(')(1:u'), d['coefficient'])
   output.append(_bbgpg22close)
   return _bbe.join(output)
+
+
+def serialize_rsa_gpg23(d, _bbe=bbe):
+  # https://lists.gnupg.org/pipermail/gnupg-devel/2017-December/033295.html
+  # GPG 2.3 will probably insert line breaks after 64 columns. It will
+  # also insert other headers (in addition to `Key: ').
+  return _bbe.join((
+      bb('Key: (private-key\n  (rsa\n  (n #'), gpg23_uint(d['modulus']),
+      bb('#)\n  (e #'), gpg23_uint(d['public_exponent']),
+      bb('#)\n  (d #'), gpg23_uint(d['private_exponent']),
+      bb('#)\n  (p #'), gpg23_uint(d['prime2']),
+      bb('#)\n  (q #'), gpg23_uint(d['prime1']),
+      bb('#)\n  (u #'), gpg23_uint(d['coefficient']),
+      bb('#)\n  ))\n')))
+
+
+def has_gpg23_header(data, i=0,  _bbd=bb('-'), _bbcsp=bb(': ')):
+  c = data[i : i + 1]
+  if not (c.isalpha() and c.upper() == c):
+    return False
+  while data[i : i + 1].isalpha() or data[i : i + 1] == _bbd:
+    i += 1
+  return data[i : i + 2] == _bbcsp
+
+
+# Format used by GPG 2.3.
+# ~/.gnupg/private-keys-v1.d/*.key
+bbgpg23 = bb('(private-key(rsa(')
+bbgpg23priv = bb('(private-key(')
+bbgpg23prot = bb('(protected-private-key(')
+
+
+def parse_rsa_gpg23(data, i=0,
+                    _bbkey=bb('\nKey: '), _bbnl=bbnl, _bbe=bbe, _bbnlsp=bb('\n '), _bbsp=bb(' '), _bbd=bb('-'),
+                    _bbop=bb('('), _bbcp=bb(')'), _bbu=bb('_'), _bbkeys=GPG_RSA_KEYS,
+                    _bbgpg23=bbgpg23, _bbgpg23priv=bbgpg23priv, _bbgpg23prot=bbgpg23prot):
+  if not has_gpg23_header(data, i):
+    raise ValueEror('Expected gpg23 header.')
+  if i == 0 and data.startswith(_bbkey[1:]):
+    i += len(_bbkey) - 1
+  else:
+    i = data.find(_bbkey)
+    if i < 0:
+      raise ValueError('Missing gpg23 key header.')
+    i += len(_bbkey)
+  data = data[i:].replace(_bbnlsp, _bbe)
+  i = data.find(_bbnl)
+  if i < 0:
+    raise ValueError('Incomplete gpg23 key header.')
+  data = _bbe.join(data[:i].replace(_bbsp, _bbe).split())
+  if not data.startswith(bbgpg23):
+    if data.startswith(bbgpg23priv):
+      raise ValueError('Non-RSA gpg23 key not supported.')
+    if data.startswith(bbgpg23prot):
+      raise ValueError('Encrypted (passphrase-protected) gpg23 key not supported.')
+    if data[:1] != _bbop:
+      raise ValueError('Expected paren in gpg23 key header.')
+    i0 = i = 1
+    while data[i : i + 1].isalpha() or data[i : i + 1] == _bbd:
+      i += 1
+    if data[i : i + 1] != _bbop:
+      raise ValueError('Expected second paren in gpg23 key header.')
+    raise ValueError('gpg23 key format not supported: %s' % aa(data[i0 : i]))
+  i, d, j = len(bbgpg23) - 1, {}, len(data)
+  while 1:
+    c = data[i : i + 1]
+    if c == _bbcp:
+      break
+    elif c != _bbop:
+      if not c:
+        raise ValueError('EOF in gpg23 entry start.')
+      raise ValueError('Paren expected in gpg23 entry, got: %r' % c)
+    i += 1
+    i0 = i
+    while data[i : i + 1].isalpha() or data[i : i + 1] == _bbd:
+      i += 1
+    key = data[i0 : i]
+    if len(key) != 1 or key not in _bbkeys:
+      raise ValueError('Bad gpg23 key: %r' % key)
+    key = aa(key)
+    i, value = parse_gpg23_uint(data, i, j)
+    if data[i : i + 1] != _bbcp:
+      raise ValueError('Close paren expected in gpg23 entry.')
+    i += 1
+    d[key] = value
+  # Typically d has all of GPG_RSA_KEYS now, but get_rsa_private_key will
+  # raise an exception if it doesn't.
+  return d
 
 
 def convert_rsa_data(d, format='pem', effort=None,
@@ -862,9 +985,11 @@ def convert_rsa_data(d, format='pem', effort=None,
     elif data.startswith(_bbgpg22):
       d = parse_rsa_gpg22_numbers(data, len(_bbgpg22) - 1)
     elif data.startswith(_bbgpg22prot):
-      raise ValueError('Encrypted (passphrase-protected) GPG 2.2 key not supported.')
+      raise ValueError('Encrypted (passphrase-protected) gpg22 key not supported.')
     elif has_hexa_header(data, 0):
       d = parse_rsa_hexa(data, 0)
+    elif has_gpg23_header(data):
+      d = parse_rsa_gpg23(data)
     else:
       # TODO(pts): Add support for RSA private keys in GPG `gpg
       # --export-secret-keys', selected by key ID.
@@ -893,6 +1018,8 @@ def convert_rsa_data(d, format='pem', effort=None,
       return serialize_rsa_hexa(d)
     if format in 'gpg22':
       return serialize_rsa_gpg22(d)
+    if format in 'gpg23':
+      return serialize_rsa_gpg23(d)
     d, data = None, serialize_rsa_der(d)
   if not (isinstance(data, bytes) and d is None):
     raise TypeError
@@ -927,6 +1054,7 @@ def quick_test():
   open('t.msblob', 'wb').write(convert_rsa_data(d, 'msblob'))
   open('t.hexa', 'wb').write(convert_rsa_data(d, 'hexa'))
   open('t.gpg22', 'wb').write(convert_rsa_data(d, 'gpg22'))
+  open('t.gpg23', 'wb').write(convert_rsa_data(d, 'gpg23'))
 
   public_exponent, private_exponent, prime1, prime2, exponent1, exponent2, coefficient, modulus = (
       d['public_exponent'], d['private_exponent'], d['prime1'], d['prime2'], d['exponent1'], d['exponent2'], d['coefficient'], d['modulus'])
@@ -988,7 +1116,7 @@ def main(argv):
         '-dump\n'
         '-in <input-filename>\n'
         '-out <output-filename>\n'
-        '-outform <output-format>: Any of der, pem (default), der2, pem2, msblob, dropbear, hexa, gpg22.\n'
+        '-outform <output-format>: Any of der, pem (default), der2, pem2, msblob, dropbear, hexa, gpg22, gpg23.\n'
         '-inform <input-format>; Ignored. Autodetected instead.\n'
         .replace('%s', argv[0]))
     sys.exit(1)
