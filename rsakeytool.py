@@ -833,7 +833,8 @@ def parse_rsa_msblob_numbers(data, i=0, j=None):
   return d
 
 
-GPG_RSA_KEYS = bb('nedpqu')
+GPG_RSA_KEYS_AA = 'nedpqu'
+GPG_RSA_KEYS = bb(GPG_RSA_KEYS_AA)
 
 
 def parse_rsa_gpg22_numbers(data, i=0, j=None, _bbop=bb('('), _bbcp=bb(')'), _bbu=bb('_'), _bbkeys=GPG_RSA_KEYS):
@@ -970,8 +971,118 @@ def parse_rsa_gpg23(data, i=0,
   return d
 
 
-def convert_rsa_data(d, format='pem', effort=None,
-                     _bbe=bbe, _bbd=bb('-'), _bb30=bb('\x30'), _bbsshrsa=bbsshrsa, _bbmsblob=bbmsblob, _bbgpg22=bbgpg22, _bbgpg22prot=bbgpg22prot):
+bbgpglists = (bb('gpg: '), bb('# off='), bb(':secret key packet:'))
+
+
+def parse_rsa_gpglist(data, i, keyid, _bbnl=bbnl, _bbcr=bb('\r'), _bbe=bbe, _bbcolonsp=bb(': '), _bbspcomma=bb(', '), _bbsp=bb(' '), _bbclsqb=bb(']'), _bb1=bb('1'),
+                      _bbskps=(bb(':secret key packet:'), bb(':secret sub key packet:'), bb(':public key packet:'), bb(':public sub key packet:')), _bbbits=bb(' bits]'),
+                      _bbtab=bb('\t'), _bbversion=bb('\tversion '), _bbpkey=bb('pkey['), _bbskey=bb('skey['), _bbprotected=bb('protected'), _bbsecmem=bb('gpg: secmem usage: ')):
+  """Parses output of: gpg --export-secret-key ... |
+  gpg --list-packets -vvv --debug 0x2"""
+  import sys
+  data = data[i:]
+  if keyid is not None:
+    keyid = keyid.upper()
+
+  def yield_dicts():
+    state = 0
+    d = {}
+    preline = _bbe
+    for line in data.replace(_bbcr, _bbe).split(_bbnl):
+      line, preline = preline + line.rstrip(), _bbe
+      i = line.find(_bbsecmem)  # Sometimes flushed into the middle of the key hex digits.
+      if i >= 0:
+        preline += line[:i]
+        continue
+      if line in _bbskps:
+        if d:
+          yield d
+        d = {}
+        state = 1
+      elif state == 1:
+        if not line.startswith(_bbtab):
+          state = 2
+        elif line.startswith(_bbversion):
+          for item in line[1:].split(_bbspcomma):
+            i = item.find(_bbsp)
+            if i > 0:
+              key, value = item[:i], item[i + 1:]
+              try:
+                d[aa(key)] = value
+              except ValueError:
+                pass  # Ignore non-ASCII keys.
+        else:
+          i = line.find(_bbcolonsp)
+          if i > 0:
+            key, value = line[1 : i], line[i + 2:]
+            if (key.startswith(_bbpkey) or key.startswith(_bbskey)) and key.endswith(_bbclsqb):
+              key0, key = key, key[5 : -1]
+              if d.get('algo') == _bb1:  # RSA.
+                try:
+                  key = int(key)
+                except ValueError:
+                  key = None
+                if key is not None and 0 <= key < 4:
+                  if _bbprotected in value:
+                    d['is_protected'] = True
+                  else:
+                    if value.endswith(_bbbits):
+                      raise ValueError('Missing hex digits in gpglist RSA uint, use this to dump: gpg --list-packets --debug 0x2')
+                    try:
+                      value = int(value, 16)
+                    except ValueError:
+                      value = None
+                    if value is None:
+                      raise ValueError('Bad hex digits in key: %r' % key0)
+                    d[GPG_RSA_KEYS_AA[key]] = value
+            else:
+              try:
+                key = aa(key)
+              except ValueError:
+                key = ''  # Ignore non-ASCII keys.
+              if key == 'keyid':
+                try:
+                  int(value, 16)
+                except ValueError:
+                  value = None
+                if value is None:
+                  raise ValueError('Syntax error in keyid: %r' % value)
+                value = aa(value).upper()
+                d[key] = value
+              elif 'protect' in key:
+                d['is_protected'] = True
+    if d:
+      yield d
+
+  dk = None
+  for d in yield_dicts():
+    if 'keyid' in d:
+      if d.get('algo') != _bb1:
+        sys.stderr.write('info: ignoring non-RSA key: -keyid %s\n' % d['keyid'])
+      elif 'n' in d and 'e' in d and 'd' not in d:
+        if d.get('is_protected'):
+          sys.stderr.write('info: ignoring protected RSA secret key: -keyid %s\n' % d['keyid'])
+        else:
+          sys.stderr.write('info: ignoring RSA public key: -keyid %s\n' % d['keyid'])
+      elif not ('n' in d and 'e' in d and 'd' in d and 'p' in d):
+        sys.stderr.write('info: ignoring partial RSA key: -keyid %s\n' % d['keyid'])
+      else:
+        d.pop('algo', None)
+        d.pop('version', None)
+        if d['keyid'] == keyid:
+          dk = d
+          sys.stderr.write('info: using RSA private key: -keyid %s\n' % d['keyid'])
+        else:
+          sys.stderr.write('info: found RSA private key: -keyid %s\n' % d['keyid'])
+  if keyid is None:
+    raise ValueError('Please specify -keyid ... to select GPG key.')
+  elif dk is None:
+    raise ValueError('Specified -keyid key not found: %r' % keyid)
+  return dk
+
+
+def convert_rsa_data(d, format='pem', effort=None, keyid=None,
+                     _bbe=bbe, _bbd=bb('-'), _bb30=bb('\x30'), _bbsshrsa=bbsshrsa, _bbmsblob=bbmsblob, _bbgpg22=bbgpg22, _bbgpg22prot=bbgpg22prot, _bbgpglists=bbgpglists):
   if isinstance(d, bytes):
     data = d
     if data.startswith(_bbsshrsa):
@@ -990,6 +1101,8 @@ def convert_rsa_data(d, format='pem', effort=None,
       d = parse_rsa_hexa(data, 0)
     elif has_gpg23_header(data):
       d = parse_rsa_gpg23(data)
+    elif [1 for prefix in _bbgpglists if data.startswith(prefix)]:
+      d = parse_rsa_gpglist(data, 0, keyid)
     else:
       # TODO(pts): Add support for RSA private keys in GPG `gpg
       # --export-secret-keys', selected by key ID.
@@ -1001,11 +1114,12 @@ def convert_rsa_data(d, format='pem', effort=None,
         d, data = data, None
       else:
         i, j, i0 = parse_rsa_der_header(data)  # DER format.
-        if effort is None or effort >= 2 or format == 'dict':
+        if effort is None or effort >= 2 or format not in ('der', 'pem', 'der2', 'pem2'):
           d = parse_rsa_der_numbers(data, i, j)
         else:
-          d, data = None, data[i0 : j]
-  if isinstance(d, dict):
+          d, data = False, data[i0 : j]
+  if d is not False:
+    assert isinstance(d, dict)
     if not is_rsa_private_key_complete(d, effort):
       d = get_rsa_private_key(**d)
     if format == 'dict':
@@ -1020,6 +1134,8 @@ def convert_rsa_data(d, format='pem', effort=None,
       return serialize_rsa_gpg22(d)
     if format in 'gpg23':
       return serialize_rsa_gpg23(d)
+    if format not in ('der', 'pem', 'der2', 'pem2'):
+      raise ValueError('Unknown RSA private key format: %r' % (format,))
     d, data = None, serialize_rsa_der(d)
   if not (isinstance(data, bytes) and d is None):
     raise TypeError
@@ -1032,7 +1148,6 @@ def convert_rsa_data(d, format='pem', effort=None,
     return data
   if format == 'pem2':
     return _bbe.join((bb('-----BEGIN PRIVATE KEY-----\n'), base64_encode(data), bb('\n-----END PRIVATE KEY-----\n')))
-  raise ValueError('Unknown RSA private key format: %r' % (format,))
 
 
 # --- main()
@@ -1117,7 +1232,8 @@ def main(argv):
         '-in <input-filename>\n'
         '-out <output-filename>\n'
         '-outform <output-format>: Any of der, pem (default), der2, pem2, msblob, dropbear, hexa, gpg22, gpg23.\n'
-        '-inform <input-format>; Ignored. Autodetected instead.\n'
+        '-inform <input-format>: Ignored. Autodetected instead.\n'
+        '-keyid <key-id>: Selects GPG key to load from file. Omit to get a list.\n'
         .replace('%s', argv[0]))
     sys.exit(1)
   i = 1
@@ -1126,7 +1242,7 @@ def main(argv):
     #sys.exit(1)
     i += 1
 
-  infn = outfn = None
+  keyid = infn = outfn = None
   format = 'pem'
   while i < len(argv):
     arg = argv[i]
@@ -1134,7 +1250,7 @@ def main(argv):
     if arg == '-dump':
       format = 'dict'
       continue
-    if arg not in ('-in', '-out', '-outform', '-inform'):
+    if arg not in ('-in', '-out', '-outform', '-inform', '-keyid'):
       sys.stderr.write('fatal: unknown flag (use --help): %s\n' % arg)
       sys.exit(1)
     if i == len(argv):
@@ -1146,6 +1262,8 @@ def main(argv):
       infn = value
     elif arg == '-out':
       outfn = value
+    elif arg == '-keyid':
+      keyid = value.upper()
     elif arg == '-outform':
       if value == 'dict':
         sys.stderr.write('fatal: -outform dict not supported on the command-line\n')
@@ -1172,7 +1290,7 @@ def main(argv):
   finally:
     f.close()
   if format == 'dict':  # -dump.
-    sys.stdout.write(aa(convert_rsa_data(data, 'hexa')))
+    sys.stdout.write(aa(convert_rsa_data(data, 'hexa', keyid=keyid)))
     sys.stdout.flush()
   else:
     data = convert_rsa_data(data, format)

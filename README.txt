@@ -2,8 +2,8 @@ rsakeytool.py: Convert between various RSA private key formats
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 rsakeytool.py is a command-line tool written in Python to convert between
 various RSA private key formats (e.g. PEM, DER, Microsoft, Dropbear, GPG 2.2
-.key, GPG 2.3 .key). The command-line interface is compatible with of
-`openssl rsa ...'.
+.key, GPG 2.3 .key). It can also read RSA private keys exported from GPGP.
+The command-line interface is compatible with of `openssl rsa ...'.
 
 Extra features over `openssl rsa ...':
 
@@ -55,5 +55,18 @@ Example usage for key recovery (all fields from 3 fields):
   exponent1 = 0x11
   exponent2 = 0x9
   coefficient = 0x18
+
+Example for exporting an RSA private key from GPG (using
+https://github.com/pts/gpg-export-secret-key-unprotected):
+
+  $ ./gpg-export-secret-key-unprotected MYKEY |
+    gpg --list-packets --debug 0x2 >gpgkeys.lst
+  $ ./rsakeytool.py rsa -in gpgkeys.lst -dump
+  info: found RSA private key: -keyid 1111111111111111
+  info: found RSA private key: -keyid AAAAAAAAAAAAAAAA
+  ...
+  $ ./rsakeytool.py rsa -in gpgkeys.lst -keyid 1111111111111111 -dump
+  modulus = 0x...
+  ...
 
 __END__
