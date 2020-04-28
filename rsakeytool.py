@@ -215,26 +215,40 @@ def base64_encode(data, _bbnl=bbnl):
   return _bbnl.join(output)
 
 
-# --- Dropbear SSH private key format.
+# --- Dropbear SSH and OpenSSH private key format.
 
 
-def parse_dropbear_uint(data, i, j=None):
+def parse_be32size_uint(data, i, j=None):
   if j is not None and j < i + 4:
-    raise ValueError('EOF in size-limited dropbear uint size.')
+    raise ValueError('EOF in size-limited be32size uint size.')
   if len(data) < i + 4:
-    raise ValueError('EOF in dropbear uint size.')
+    raise ValueError('EOF in be32size uint size.')
   size, = struct.unpack('>L', data[i : i + 4])
   i += 4
   if j is not None and j < i + size:
-    raise ValueError('EOF in size-limited dropbear uint.')
+    raise ValueError('EOF in size-limited be32size uint.')
   if len(data) < i + size:
-    raise ValueError('EOF in dropbear uint.')
+    raise ValueError('EOF in be32size uint.')
   if size > 0 and struct.unpack('>B', data[i : i + 1])[0] >= 0x80:
-    raise ValueError('Negative dropbox uint.')
+    raise ValueError('Negative be32size uint.')
   return i + size, uint_from_be(data[i : i + size])
 
 
-def dropbear_value(value):
+def parse_be32size_bytes(data, i, j=None):
+  if j is not None and j < i + 4:
+    raise ValueError('EOF in size-limited be32size bytes size.')
+  if len(data) < i + 4:
+    raise ValueError('EOF in be32size bytes size.')
+  size, = struct.unpack('>L', data[i : i + 4])
+  i += 4
+  if j is not None and j < i + size:
+    raise ValueError('EOF in size-limited be32size bytes.')
+  if len(data) < i + size:
+    raise ValueError('EOF in be32size uint.')
+  return i + size, data[i : i + size]
+
+
+def be32size_value(value):
   if isinstance(value, integer_types):
     data = uint_to_any_be(value, is_low=True)
   elif isinstance(value, bytes):
@@ -495,7 +509,7 @@ def get_rsa_private_key(**kwargs):
   if prime1 < 3 or prime2 < 2:
     raise ValueError('Primes are too small.')
   if modulus != prime1 * prime2:
-    raise ValueError('Bad modulus.')
+    raise ValueError('Mismatch in modulus vs primes.')
   try:
     coefficient = modinv(prime2, prime1)
   except ValueError:
@@ -534,7 +548,7 @@ def get_rsa_private_key(**kwargs):
   # * prime2: (smaller prime) MPI of RSA secret prime value p;
   # * prime1: (larger prime) MPI of RSA secret prime value q (p < q);
   # * coefficient: MPI of u, the multiplicative inverse of p, mod q.
-  return {
+  d = {
       'modulus': modulus,  # Public.
       'prime1': prime1,
       'prime2': prime2,
@@ -544,6 +558,10 @@ def get_rsa_private_key(**kwargs):
       'exponent2': private_exponent % (prime2 - 1),
       'coefficient': coefficient,
   }
+  for key in ('comment',):
+    if key in kwargs:
+      d.setdefault(key, kwargs[key])
+  return d
 
 
 def is_rsa_private_key_complete(d, effort=None):
@@ -686,16 +704,33 @@ def parse_rsa_pem(data,
   return binascii.a2b_base64(data)
 
 
-def parse_rsa_dropbear_numbers(data, i=0, j=None):
+def parse_rsa_ssh_numbers(data, i=0, j=None, format='dropbear'):
   if j is None:
     j = len(data)
   d = {}
-  i, d['public_exponent'] = parse_dropbear_uint(data, i, j)
-  i, d['modulus'] = parse_dropbear_uint(data, i, j)
-  i, d['private_exponent'] = parse_dropbear_uint(data, i, j)
-  i, d['prime1'] = parse_dropbear_uint(data, i, j)
-  # prime2 is the last number in the file, but we don't need it.
-  # i, d['prime2'] = parse_dropbear_uint(data, i, j)
+  # OpenSSH order:   modulus,         public_exponent, private_exponent, coefficient, prime1, prime2, comment (binary), padding123.
+  # Dropbear order:  public_exponent, modulus,         private_exponent, prime1, prime2.
+  i, d['modulus'] = parse_be32size_uint(data, i, j)
+  i, d['public_exponent'] = parse_be32size_uint(data, i, j)
+  if d['modulus'] > d['public_exponent']:
+    if format and format != 'opensshsingle':
+      raise ValueError('modulus vs public_exponent indicate opensshsingle input format, got: %r' % format)
+    i, d['private_exponent'] = parse_be32size_uint(data, i, j)
+    i, unused_coefficient = parse_be32size_uint(data, i, j)
+    i, d['prime1'] = parse_be32size_uint(data, i, j)
+    # We don't need prime2.
+    i, unused_prime2 = parse_be32size_uint(data, i, j)
+    i, d['comment'] = parse_be32size_bytes(data, i, j)
+    if not d['comment']:
+      del d['comment']
+  else:
+    if format and format != 'dropbear':
+      raise ValueError('modulus vs public_exponent indicate dropbear input format, got: %r' % format)
+    d['modulus'], d['public_exponent'] = d['public_exponent'], d['modulus']
+    i, d['private_exponent'] = parse_be32size_uint(data, i, j)
+    i, d['prime1'] = parse_be32size_uint(data, i, j)
+    # prime2 is the last number in the file, but we don't need it.
+    # i, d['prime2'] = parse_be32size_uint(data, i, j)
   return d
 
 
@@ -703,7 +738,15 @@ bbsshrsa = bb('\0\0\0\7ssh-rsa')  # TODO(pts): Uppercase variable names.
 
 
 def serialize_rsa_dropbear(d, _bbe=bbe, _bbsshrsa=bbsshrsa):
-  return _bbe.join((_bbsshrsa, dropbear_value(d['public_exponent']), dropbear_value(d['modulus']), dropbear_value(d['private_exponent']), dropbear_value(d['prime1']), dropbear_value(d['prime2'])))
+  return _bbe.join((_bbsshrsa, be32size_value(d['public_exponent']), be32size_value(d['modulus']), be32size_value(d['private_exponent']), be32size_value(d['prime1']), be32size_value(d['prime2'])))
+
+
+def serialize_rsa_opensshsingle(d, _bbe=bbe, _bbsshrsa=bbsshrsa, _bbpad15=bb('\1\2\3\4\5\6\7\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f')):
+  output = [_bbsshrsa, be32size_value(d['modulus']), be32size_value(d['public_exponent']), be32size_value(d['private_exponent']), be32size_value(d['coefficient']), be32size_value(d['prime1']), be32size_value(d['prime2']), be32size_value(d.get('comment', _bbe))]
+  size = sum(map(len, output))
+  if size & 15:
+    output.append(_bbpad15[:-size & 15])
+  return _bbe.join(output)
 
 
 bbmsblob = struct.pack('<LL4s', 0x207, 0xa400, bb('RSA2'))
@@ -731,7 +774,7 @@ def serialize_rsa_msblob(d, _bbe=bbe, _bbz=bbz, _bbmsblob=bbmsblob):
       le_padded(d['private_exponent'], size)))
 
 
-HEXA_KEYS = ('modulus', 'public_exponent', 'private_exponent', 'prime1', 'prime2', 'exponent1', 'exponent2', 'coefficient')
+HEXA_KEYS = ('modulus', 'public_exponent', 'private_exponent', 'prime1', 'prime2', 'exponent1', 'exponent2', 'coefficient', 'comment')
 HEXA_ALIASES = {'n': 'modulus', 'e': 'public_exponent', 'd': 'private_exponent', 'q': 'prime1', 'p': 'prime2', 'u': 'coefficient'}
 
 
@@ -744,6 +787,68 @@ def has_hexa_header(data, i, _bbu=bb('_'), _bbeq=bb('=')):
   key = aa(data[i0 : i])
   key = HEXA_ALIASES.get(key, key)
   return key in HEXA_KEYS
+
+
+BYTES_UNESCAPES = {bb('a'): bb('\a'), bb('b'): bb('\b'), bb('f'): bb('\f'), bb('n'): bb('\n'), bb('r'): bb('\r'), bb('t'): bb('\t'), bb('v'): bb('\v')}
+
+
+def parse_repr_bytes(data, _bbqs=(bb('b\''), bb('b"')), _bbnl=bbnl, _bbbs=bb('\\'), _bbe=bbe, _bbxx=bb('xX'), _bb0123=bb('0123'),
+                     _bbbsbs=bb('\\\\'), _bbr1=bb('\\x5c'), _bbr2=bb('\\\''), _bbr3=bb('\\x27'), _bbr4=bb('\\"'), _bbr5=bb('\\x22')):
+  if not isinstance(data, bytes):
+    raise TypeError
+  prefix = data[:2].lower()
+  if prefix not in _bbqs:
+    raise ValueError('Not a bytes literal prefix.')
+  if len(data) < 2 or not data.endswith(data[1 : 2]):
+    raise ValueError('Not a bytes literal suffix.')
+  # ast.literal_eval can't parse byte string literals in
+  # Python 3.0, so we don't use it here.
+  data = data[2 : -1]
+  if _bbnl in data:
+    raise ValueError('Found newline in bytes literal.')
+  data = data.replace(_bbbsbs, _bbr1).replace(_bbr2, _bbr3).replace(_bbr4, _bbr5)
+  if prefix[1:] in data:
+    raise ValueError('Delimiter syntax error in bytes literal.')
+  if _bbbs in data:  # Slow processing if contains backslash.
+    i, size, output = 0, len(data), []
+    while 1:
+      i0, i = i, data.find(_bbbs, i)
+      if i < 0:
+        output.append(data[i0:])
+        break
+      if i + 1 >= size:
+        raise ValueError('Trailing backslash in bytes literal.')
+      if i > i0:
+        output.append(data[i0 : i])
+      c = data[i + 1 : i + 2]
+      if c in _bbxx:  # We support \x?? only (not shorter).
+        if i + 4 > size:
+          raise ValueError('EOF in hex escape.')
+        try:
+          c = binascii.unhexlify(data[i + 2 : i + 4])
+        except (ValueError, TypeError):
+          c = None
+        if c is None:
+          raise ValueError('Bad hex escape.')
+        i += 4
+      elif c in _bb0123:  # We support \??? only (not shorter).
+        if i + 4 > size:
+          raise ValueError('EOF in oct escape.')
+        try:
+          c = struct.pack('>B', int(data[i + 1 : i + 4], 8))
+        except ValueError:
+          c = None
+        if c is None:
+          raise ValueError('Bad oct escape.')
+        i += 4
+      else:
+        c = BYTES_UNESCAPES.get(c)
+        if not c:
+          raise ValueError('Bad backslash escape: %r' % data[i : i + 1])
+        i += 2
+      output.append(c)
+    data = _bbe.join(output)
+  return data
 
 
 def parse_rsa_hexa(data, i, _bbu=bb('_'), _bbeq=bb('=')):
@@ -759,24 +864,29 @@ def parse_rsa_hexa(data, i, _bbu=bb('_'), _bbeq=bb('=')):
     if data[i : i + 1] != _bbeq:
       raise ValueError('Assignment expected after hexa key %r.' % key)
     i += 1
-    key = HEXA_ALIASES.get(key, key)
-    if key not in HEXA_KEYS:
-      raise ValueError('Unknown assignment key: %r' % key)
     if key in d:
       raise ValueError('Duplicate assignment key %r.' % key)
+    if key != 'comment':
+      key = HEXA_ALIASES.get(key, key)
+      if key not in HEXA_KEYS:
+        raise ValueError('Unknown assignment key: %r' % key)
     while data[i : i + 1].isspace():
       i += 1
     i2 = i
     while j > i and not data[i : i + 1].isspace():
       i += 1
-    try:
-      value = int(data[i2 : i], 0)
-    except ValueError:
-      value = None
-    if value is None:
-      raise ValueError('Syntax error in integer for assignment key %r: %r' % (key, data[i2 : i]))
-    if value < 0:
-      raise ValueError('Negative integer for assignment key %r.' % key)
+    value = data[i2 : i]
+    if key == 'comment':
+      value = parse_repr_bytes(value.strip())
+    else:
+      try:
+        value = int(value, 0)
+      except ValueError:
+        value = None
+      if value is None:
+        raise ValueError('Syntax error in integer for assignment key %r: %r' % (key, data[i2 : i]))
+      if value < 0:
+        raise ValueError('Negative integer for assignment key %r.' % key)
     d[key] = value
     if i == j:
       break
@@ -792,24 +902,34 @@ def serialize_rsa_hexa(d, _bbassign=bb(' = '), _bb0x=bb('0x'), _bbnl=bbnl, _bbe=
   """Serializes hexa: hexadecimal assignment."""
   output = []
   for key in HEXA_KEYS:
+    if key not in d:
+      if key != 'comment':
+        raise KeyError('RSA key missing: %r' % key)
+      continue
     value = d[key]
     output.append(bb(key))
     output.append(_bbassign)
-    try:
-      value = _bbpx % value
-    except TypeError:  # Python 3.0--3.4.
-      value = bytes(hex(value), 'ascii')
-      if len(value) & 1:
+    if key == 'comment':
+      value = repr(value)
+      if value[:1] in '"\'':
+        value = 'b' + value  # Binary string in Python 2.x.
+      output.append(bb(value))
+    else:
+      try:
+        value = _bbpx % value
+      except TypeError:  # Python 3.0--3.4.
+        value = bytes(hex(value), 'ascii')
+        if len(value) & 1:
+          output.append(_bb0x)
+          output.append(_bb0)
+          value = value[2:]
+        output.append(value)
+        value = ()
+      if value:
         output.append(_bb0x)
-        output.append(_bb0)
-        value = value[2:]
-      output.append(value)
-      value = ()
-    if value:
-      output.append(_bb0x)
-      if len(value) & 1:
-        output.append(_bb0)
-      output.append(value)
+        if len(value) & 1:
+          output.append(_bb0)
+        output.append(value)
     output.append(_bbnl)
   return _bbe.join(output)
 
@@ -1088,7 +1208,9 @@ def convert_rsa_data(d, format='pem', effort=None, keyid=None,
     if data.startswith(_bbsshrsa):
       # Dropbear SSH RSA private key format, output of:
       # dropbearconvert openssh dropbear id_rsa id_rsa.dropbear
-      d = parse_rsa_dropbear_numbers(data, len(_bbsshrsa))
+      # This can also be OpenSSH RSA private key format (usually not
+      # observed in the wild).
+      d = parse_rsa_ssh_numbers(data, len(_bbsshrsa), j=None, format=None)
     elif data.startswith(_bbmsblob):
       # Microsoft SSH RSA private key format, output of:
       # openssl rsa -outform msblob -in key.pem -out key.msblob
@@ -1126,6 +1248,8 @@ def convert_rsa_data(d, format='pem', effort=None, keyid=None,
       return d
     if format == 'dropbear':
       return serialize_rsa_dropbear(d)
+    if format == 'opensshsingle':
+      return serialize_rsa_opensshsingle(d)
     if format == 'msblob':
       return serialize_rsa_msblob(d)
     if format == 'hexa':
@@ -1166,6 +1290,7 @@ def quick_test():
   open('t2.der', 'wb').write(convert_rsa_data(d, 'der2'))
   open('t2.pem', 'wb').write(convert_rsa_data(d, 'pem2'))
   open('t.dropbear', 'wb').write(convert_rsa_data(d, 'dropbear'))
+  open('t.opensshsingle', 'wb').write(convert_rsa_data(d, 'opensshsingle'))
   open('t.msblob', 'wb').write(convert_rsa_data(d, 'msblob'))
   open('t.hexa', 'wb').write(convert_rsa_data(d, 'hexa'))
   open('t.gpg22', 'wb').write(convert_rsa_data(d, 'gpg22'))
@@ -1231,7 +1356,7 @@ def main(argv):
         '-dump\n'
         '-in <input-filename>\n'
         '-out <output-filename>\n'
-        '-outform <output-format>: Any of der, pem (default), der2, pem2, msblob, dropbear, hexa, gpg22, gpg23.\n'
+        '-outform <output-format>: Any of der, pem (default), der2, pem2, msblob, dropbear, opensshsingle, hexa, gpg22, gpg23.\n'
         '-inform <input-format>: Ignored. Autodetected instead.\n'
         '-keyid <key-id>: Selects GPG key to load from file. Omit to get a list.\n'
         .replace('%s', argv[0]))
