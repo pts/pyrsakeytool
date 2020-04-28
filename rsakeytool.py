@@ -204,14 +204,14 @@ def parse_der_uint(data, i, j=None):
   return i + size, uint_from_be(data[i : i + size])
 
 
-def base64_encode(data, _bbnl=bbnl):
+def base64_encode(data, line_size=64, _bbnl=bbnl):
   data = binascii.b2a_base64(data).rstrip(_bbnl)
   if not isinstance(data, bytes):
     raise TypeError
   output, i = [], 0
   while i < len(data):
-    output.append(data[i : i + 64])  # base64.encodestring uses 76.
-    i += 64
+    output.append(data[i : i + line_size])  # base64.encodestring uses 76.
+    i += line_size
   return _bbnl.join(output)
 
 
@@ -664,7 +664,7 @@ def parse_rsa_der_header(data, i=0, _bb30=bb('\x30')):
 def parse_rsa_pem(data,
                   _bbe=bbe, _bbd=bb('-'),
                   _bb30=bb('\x30'), _bb50=bb('\5\0'), _bbbegin=bb('\n-----BEGIN '), _bbend=bb('\n-----END '), _bbnl=bbnl, _bbcolon=bb(':'),
-                  _bbencrypted=bb('ENCRYPTED '), _bbrsapk=bb('RSA PRIVATE KEY-----\n'), _bbpk=bb('PRIVATE KEY-----\n')):
+                  _bbencrypted=bb('ENCRYPTED '), _bbrsapk=bb('RSA PRIVATE KEY-----\n'), _bbopensshpk=bb('OPENSSH PRIVATE KEY-----\n'), _bbpk=bb('PRIVATE KEY-----\n')):
   # PEM format. Used by both `openssl rsa' (and web servers) and OpenSSH.
   if data.startswith(_bbbegin[1:]):
     i = len(_bbbegin) - 1
@@ -685,10 +685,13 @@ def parse_rsa_pem(data,
   j = data.find(_bbnl, i + 1)
   if j < 0:
     raise ValueError('EOF in pem BEGIN line.')
+  is_openssh = False
   if data[i : i + len(_bbrsapk)] == _bbrsapk:
     pass
   elif data[i : i + len(_bbpk)] == _bbpk:
     pass
+  elif data[i : i + len(_bbopensshpk)] == _bbopensshpk:
+    is_openssh = True
   elif data[i : i + len(_bbencrypted)] == _bbencrypted:
     raise ValueError('Encrypted (passphrase-protected) pem key not supported.')
   else:
@@ -703,7 +706,10 @@ def parse_rsa_pem(data,
   if _bbcolon in data:
     raise ValueError('Encrypted (passphrase-protected) pem key (in data) not supported.')
   # TODO(pts): Check for disallowed characters (e.g. ~) in data.
-  return binascii.a2b_base64(data)
+  data = binascii.a2b_base64(data)
+  if is_openssh:
+    return parse_rsa_opensshbin(data)
+  return data
 
 
 def parse_rsa_ssh_numbers(data, i=0, j=None, format='dropbear'):
@@ -813,6 +819,21 @@ def serialize_rsa_opensshbin(d, _bbopensshbin=bbopensshbin, _bbsshrsa=bbsshrsa, 
   public_key_data = _bbe.join((_bbsshrsa, be32size_value(d['public_exponent']), be32size_value(d['modulus'])))
   private_key_data = serialize_rsa_opensshld(d)
   return _bbe.join((_bbopensshbin, _bbnonestr, _bbnonestr, _bbemptystr, _bbonekey, struct.pack('>L', len(public_key_data)), public_key_data, private_key_data))
+
+
+def serialize_rsa_opensshbin(d, _bbopensshbin=bbopensshbin, _bbsshrsa=bbsshrsa, _bbe=bbe, _bbnonestr=bb('\0\0\0\4none'), _bbemptystr=bb('\0\0\0\0'), _bbonekey=bb('\0\0\0\1')):
+  # https://github.com/openssh/openssh-portable/blob/20819b962dc1467cd6fad5486a7020c850efdbee/PROTOCOL.key#L10-L19
+  public_key_data = _bbe.join((_bbsshrsa, be32size_value(d['public_exponent']), be32size_value(d['modulus'])))
+  private_key_data = serialize_rsa_opensshld(d)
+  return _bbe.join((_bbopensshbin, _bbnonestr, _bbnonestr, _bbemptystr, _bbonekey, struct.pack('>L', len(public_key_data)), public_key_data, private_key_data))
+
+
+bbopensshbegin = bb('-----BEGIN OPENSSH PRIVATE KEY-----\n')
+bbopensshend = bb('\n-----END OPENSSH PRIVATE KEY-----\n')
+
+
+def serialize_rsa_openssh(d, _bbopensshbegin=bbopensshbegin, _bbopensshend=bbopensshend, _bbe=bbe):
+  return _bbe.join((_bbopensshbegin, base64_encode(serialize_rsa_opensshbin(d), 70), _bbopensshend))
 
 
 bbmsblob = struct.pack('<LL4s', 0x207, 0xa400, bb('RSA2'))
@@ -1300,7 +1321,7 @@ def convert_rsa_data(d, format='pem', effort=None, keyid=None,
       # TODO(pts): Add support for RSA private keys in GPG `gpg
       # --export-secret-keys', selected by key ID.
       if data.startswith(_bbd) or data[:1].isspace():  # PEM or hexa format.
-        data = parse_rsa_pem(data)
+        data = parse_rsa_pem(data)  # Parses ('pem', 'pem2', 'openssh', 'hexa'-with-whitespace).
       elif data[:1] != _bb30:
         raise ValueError('Unknown RSA private key input format.')
       if isinstance(data, dict):
@@ -1319,6 +1340,8 @@ def convert_rsa_data(d, format='pem', effort=None, keyid=None,
       return d
     if format == 'dropbear':
       return serialize_rsa_dropbear(d)
+    if format == 'openssh':
+      return serialize_rsa_openssh(d)
     if format == 'opensshsingle':
       return serialize_rsa_opensshsingle(d)
     if format == 'opensshld':
@@ -1365,6 +1388,7 @@ def quick_test():
   open('t2.der', 'wb').write(convert_rsa_data(d, 'der2'))
   open('t2.pem', 'wb').write(convert_rsa_data(d, 'pem2'))
   open('t.dropbear', 'wb').write(convert_rsa_data(d, 'dropbear'))
+  open('t.openssh', 'wb').write(convert_rsa_data(d, 'openssh'))
   open('t.opensshsingle', 'wb').write(convert_rsa_data(d, 'opensshsingle'))
   open('t.opensshld', 'wb').write(convert_rsa_data(d, 'opensshld'))
   open('t.opensshbin', 'wb').write(convert_rsa_data(d, 'opensshbin'))
@@ -1433,7 +1457,7 @@ def main(argv):
         '-dump\n'
         '-in <input-filename>\n'
         '-out <output-filename>\n'
-        '-outform <output-format>: Any of der, pem (default), der2, pem2, msblob, dropbear, opensshsingle, opensshld, opensshbin, hexa, gpg22, gpg23.\n'
+        '-outform <output-format>: Any of der, pem (default), der2, pem2, msblob, dropbear, openssh (also opensshsingle, opensshld, opensshbin), hexa, gpg22, gpg23.\n'
         '-inform <input-format>: Ignored. Autodetected instead.\n'
         '-keyid <key-id>: Selects GPG key to load from file. Omit to get a list.\n'
         .replace('%s', argv[0]))
