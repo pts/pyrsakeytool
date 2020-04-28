@@ -741,12 +741,13 @@ bbsshrsa = bb('\0\0\0\7ssh-rsa')  # TODO(pts): Uppercase variable names.
 
 def parse_rsa_opensshld(data, i=0, _bb00=bb('\0\0'), _bbsshrsa=bbsshrsa):
   """Parses OpenSSH length-delimited plaintext RSA private key."""
-  if not (data.startswith(_bb00) and data[12 : 12 + len(_bbsshrsa)] == _bbsshrsa):
+  i1 = i + 12 + len(_bbsshrsa)
+  if not (data[i : i + 2] == _bb00 and data[i + 12 : i1] == _bbsshrsa):
     raise ValueError('opensshld signature not found.')
-  checkint1, checkint2 = struct.unpack('>LL', data[4 : 12])
+  checkint1, checkint2 = struct.unpack('>LL', data[i + 4 : i + 12])
   if checkint1 != checkint2:
     raise ValueError('Mismatch in opensshld checkints.')
-  d = parse_rsa_ssh_numbers(data, 12 + len(_bbsshrsa), j=None, format='opensshsingle')
+  d = parse_rsa_ssh_numbers(data, i1, j=None, format='opensshsingle')
   d['checkint'] = checkint1
   return d
 
@@ -767,6 +768,51 @@ def serialize_rsa_opensshld(d):
   data = serialize_rsa_opensshsingle(d)
   checkint = d.get('checkint', 0x43484B49)  # 'CHKI'.
   return struct.pack('>LLL', len(data) + 8, checkint, checkint) + data
+
+
+bbopensshbin = bb('openssh-key-v1\0')
+
+
+def parse_rsa_opensshbin(data, i=0, _bbsshrsa=bbsshrsa, _bbopensshbin=bbopensshbin, _bbnone=bb('none')):
+  if data[i : i + len(_bbopensshbin)] != _bbopensshbin:
+    raise ValueError('opensshbin signature not found.')
+  i += len(_bbopensshbin)
+  j = len(data)
+  i, cipher = parse_be32size_bytes(data, i, j)
+  if cipher != _bbnone:
+    raise ValueError('Encrypted (passphrase-protected) opensshbin key not supported.')
+  i, kdf = parse_be32size_bytes(data, i, j)  # Usually it's also b'none'.
+  i, kdfoptions = parse_be32size_bytes(data, i, j)  # Usually it's b''.
+  if i + 4 > j:
+    raise ValueError('EOF in opensshbin key count.')
+  key_count, = struct.unpack('>L', data[i : i + 4])
+  i += 4
+  if key_count != 1:
+    raise ValueError('Unsupported opensshbin key count: %d' % key_count)
+  if i + 4 > j:
+    raise ValueError('EOF in opensshbin public key size.')
+  public_key_size, = struct.unpack('>L', data[i : i + 4])
+  i += 4
+  j = i + public_key_size
+  i, algo = parse_be32size_bytes(data, i, j)
+  if algo != _bbsshrsa[4:]:
+    raise ValueError('Unsupported opensshbin non-RSA key.')
+  i, public_exponent = parse_be32size_uint(data, i, j)
+  i, modulus = parse_be32size_uint(data, i, j)
+  # We could check `i == j' here, but we don't bother.
+  d = parse_rsa_opensshld(data, j)
+  if d['modulus'] != modulus:
+    raise ValueError('opensshbin modulus mismatch in keys.')
+  if d['public_exponent'] != public_exponent:
+    raise ValueError('opensshbin public_exponent mismatch in keys.')
+  return d
+
+
+def serialize_rsa_opensshbin(d, _bbopensshbin=bbopensshbin, _bbsshrsa=bbsshrsa, _bbe=bbe, _bbnonestr=bb('\0\0\0\4none'), _bbemptystr=bb('\0\0\0\0'), _bbonekey=bb('\0\0\0\1')):
+  # https://github.com/openssh/openssh-portable/blob/20819b962dc1467cd6fad5486a7020c850efdbee/PROTOCOL.key#L10-L19
+  public_key_data = _bbe.join((_bbsshrsa, be32size_value(d['public_exponent']), be32size_value(d['modulus'])))
+  private_key_data = serialize_rsa_opensshld(d)
+  return _bbe.join((_bbopensshbin, _bbnonestr, _bbnonestr, _bbemptystr, _bbonekey, struct.pack('>L', len(public_key_data)), public_key_data, private_key_data))
 
 
 bbmsblob = struct.pack('<LL4s', 0x207, 0xa400, bb('RSA2'))
@@ -1222,7 +1268,7 @@ def parse_rsa_gpglist(data, i, keyid, _bbnl=bbnl, _bbcr=bb('\r'), _bbe=bbe, _bbc
 
 
 def convert_rsa_data(d, format='pem', effort=None, keyid=None,
-                     _bbe=bbe, _bbd=bb('-'), _bb30=bb('\x30'), _bbsshrsa=bbsshrsa, _bbmsblob=bbmsblob, _bbgpg22=bbgpg22, _bbgpg22prot=bbgpg22prot, _bbgpglists=bbgpglists,
+                     _bbe=bbe, _bbd=bb('-'), _bb30=bb('\x30'), _bbsshrsa=bbsshrsa, _bbopensshbin=bbopensshbin, _bbmsblob=bbmsblob, _bbgpg22=bbgpg22, _bbgpg22prot=bbgpg22prot, _bbgpglists=bbgpglists,
                      _bb00=bb('\0\0')):
   if isinstance(d, bytes):
     data = d
@@ -1232,6 +1278,8 @@ def convert_rsa_data(d, format='pem', effort=None, keyid=None,
       # This can also be OpenSSH RSA private key format (usually not
       # observed in the wild).
       d = parse_rsa_ssh_numbers(data, len(_bbsshrsa), j=None, format=None)
+    elif data.startswith(_bbopensshbin):
+      d = parse_rsa_opensshbin(data)
     elif data.startswith(_bbmsblob):
       # Microsoft SSH RSA private key format, output of:
       # openssl rsa -outform msblob -in key.pem -out key.msblob
@@ -1275,6 +1323,8 @@ def convert_rsa_data(d, format='pem', effort=None, keyid=None,
       return serialize_rsa_opensshsingle(d)
     if format == 'opensshld':
       return serialize_rsa_opensshld(d)
+    if format == 'opensshbin':
+      return serialize_rsa_opensshbin(d)
     if format == 'msblob':
       return serialize_rsa_msblob(d)
     if format == 'hexa':
@@ -1317,6 +1367,7 @@ def quick_test():
   open('t.dropbear', 'wb').write(convert_rsa_data(d, 'dropbear'))
   open('t.opensshsingle', 'wb').write(convert_rsa_data(d, 'opensshsingle'))
   open('t.opensshld', 'wb').write(convert_rsa_data(d, 'opensshld'))
+  open('t.opensshbin', 'wb').write(convert_rsa_data(d, 'opensshbin'))
   open('t.msblob', 'wb').write(convert_rsa_data(d, 'msblob'))
   open('t.hexa', 'wb').write(convert_rsa_data(d, 'hexa'))
   open('t.gpg22', 'wb').write(convert_rsa_data(d, 'gpg22'))
@@ -1382,7 +1433,7 @@ def main(argv):
         '-dump\n'
         '-in <input-filename>\n'
         '-out <output-filename>\n'
-        '-outform <output-format>: Any of der, pem (default), der2, pem2, msblob, dropbear, opensshsingle, opensshld, hexa, gpg22, gpg23.\n'
+        '-outform <output-format>: Any of der, pem (default), der2, pem2, msblob, dropbear, opensshsingle, opensshld, opensshbin, hexa, gpg22, gpg23.\n'
         '-inform <input-format>: Ignored. Autodetected instead.\n'
         '-keyid <key-id>: Selects GPG key to load from file. Omit to get a list.\n'
         .replace('%s', argv[0]))
