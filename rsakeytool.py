@@ -558,7 +558,9 @@ def get_rsa_private_key(**kwargs):
       'exponent2': private_exponent % (prime2 - 1),
       'coefficient': coefficient,
   }
-  for key in ('comment',):
+  if 'checkint' in kwargs and not isinstance(kwargs['checkint'], integer_types) and kwargs['checkint'] >> 32:
+    raise ValueError('Bad checkint: %r' % (kwargs['checkint'],))
+  for key in ('comment', 'checkint'):
     if key in kwargs:
       d.setdefault(key, kwargs[key])
   return d
@@ -737,6 +739,18 @@ def parse_rsa_ssh_numbers(data, i=0, j=None, format='dropbear'):
 bbsshrsa = bb('\0\0\0\7ssh-rsa')  # TODO(pts): Uppercase variable names.
 
 
+def parse_rsa_opensshld(data, i=0, _bb00=bb('\0\0'), _bbsshrsa=bbsshrsa):
+  """Parses OpenSSH length-delimited plaintext RSA private key."""
+  if not (data.startswith(_bb00) and data[12 : 12 + len(_bbsshrsa)] == _bbsshrsa):
+    raise ValueError('opensshld signature not found.')
+  checkint1, checkint2 = struct.unpack('>LL', data[4 : 12])
+  if checkint1 != checkint2:
+    raise ValueError('Mismatch in opensshld checkints.')
+  d = parse_rsa_ssh_numbers(data, 12 + len(_bbsshrsa), j=None, format='opensshsingle')
+  d['checkint'] = checkint1
+  return d
+
+
 def serialize_rsa_dropbear(d, _bbe=bbe, _bbsshrsa=bbsshrsa):
   return _bbe.join((_bbsshrsa, be32size_value(d['public_exponent']), be32size_value(d['modulus']), be32size_value(d['private_exponent']), be32size_value(d['prime1']), be32size_value(d['prime2'])))
 
@@ -747,6 +761,12 @@ def serialize_rsa_opensshsingle(d, _bbe=bbe, _bbsshrsa=bbsshrsa, _bbpad15=bb('\1
   if size & 15:
     output.append(_bbpad15[:-size & 15])
   return _bbe.join(output)
+
+
+def serialize_rsa_opensshld(d):
+  data = serialize_rsa_opensshsingle(d)
+  checkint = d.get('checkint', 0x43484B49)  # 'CHKI'.
+  return struct.pack('>LLL', len(data) + 8, checkint, checkint) + data
 
 
 bbmsblob = struct.pack('<LL4s', 0x207, 0xa400, bb('RSA2'))
@@ -774,7 +794,7 @@ def serialize_rsa_msblob(d, _bbe=bbe, _bbz=bbz, _bbmsblob=bbmsblob):
       le_padded(d['private_exponent'], size)))
 
 
-HEXA_KEYS = ('modulus', 'public_exponent', 'private_exponent', 'prime1', 'prime2', 'exponent1', 'exponent2', 'coefficient', 'comment')
+HEXA_KEYS = ('modulus', 'public_exponent', 'private_exponent', 'prime1', 'prime2', 'exponent1', 'exponent2', 'coefficient', 'comment', 'checkint')
 HEXA_ALIASES = {'n': 'modulus', 'e': 'public_exponent', 'd': 'private_exponent', 'q': 'prime1', 'p': 'prime2', 'u': 'coefficient'}
 
 
@@ -903,7 +923,7 @@ def serialize_rsa_hexa(d, _bbassign=bb(' = '), _bb0x=bb('0x'), _bbnl=bbnl, _bbe=
   output = []
   for key in HEXA_KEYS:
     if key not in d:
-      if key != 'comment':
+      if key not in ('comment', 'checkint'):
         raise KeyError('RSA key missing: %r' % key)
       continue
     value = d[key]
@@ -1202,7 +1222,8 @@ def parse_rsa_gpglist(data, i, keyid, _bbnl=bbnl, _bbcr=bb('\r'), _bbe=bbe, _bbc
 
 
 def convert_rsa_data(d, format='pem', effort=None, keyid=None,
-                     _bbe=bbe, _bbd=bb('-'), _bb30=bb('\x30'), _bbsshrsa=bbsshrsa, _bbmsblob=bbmsblob, _bbgpg22=bbgpg22, _bbgpg22prot=bbgpg22prot, _bbgpglists=bbgpglists):
+                     _bbe=bbe, _bbd=bb('-'), _bb30=bb('\x30'), _bbsshrsa=bbsshrsa, _bbmsblob=bbmsblob, _bbgpg22=bbgpg22, _bbgpg22prot=bbgpg22prot, _bbgpglists=bbgpglists,
+                     _bb00=bb('\0\0')):
   if isinstance(d, bytes):
     data = d
     if data.startswith(_bbsshrsa):
@@ -1225,6 +1246,8 @@ def convert_rsa_data(d, format='pem', effort=None, keyid=None,
       d = parse_rsa_gpg23(data)
     elif [1 for prefix in _bbgpglists if data.startswith(prefix)]:
       d = parse_rsa_gpglist(data, 0, keyid)
+    elif data.startswith(_bb00) and data[12 : 12 + len(_bbsshrsa)] == _bbsshrsa:
+      d = parse_rsa_opensshld(data)
     else:
       # TODO(pts): Add support for RSA private keys in GPG `gpg
       # --export-secret-keys', selected by key ID.
@@ -1250,6 +1273,8 @@ def convert_rsa_data(d, format='pem', effort=None, keyid=None,
       return serialize_rsa_dropbear(d)
     if format == 'opensshsingle':
       return serialize_rsa_opensshsingle(d)
+    if format == 'opensshld':
+      return serialize_rsa_opensshld(d)
     if format == 'msblob':
       return serialize_rsa_msblob(d)
     if format == 'hexa':
@@ -1291,6 +1316,7 @@ def quick_test():
   open('t2.pem', 'wb').write(convert_rsa_data(d, 'pem2'))
   open('t.dropbear', 'wb').write(convert_rsa_data(d, 'dropbear'))
   open('t.opensshsingle', 'wb').write(convert_rsa_data(d, 'opensshsingle'))
+  open('t.opensshld', 'wb').write(convert_rsa_data(d, 'opensshld'))
   open('t.msblob', 'wb').write(convert_rsa_data(d, 'msblob'))
   open('t.hexa', 'wb').write(convert_rsa_data(d, 'hexa'))
   open('t.gpg22', 'wb').write(convert_rsa_data(d, 'gpg22'))
@@ -1356,7 +1382,7 @@ def main(argv):
         '-dump\n'
         '-in <input-filename>\n'
         '-out <output-filename>\n'
-        '-outform <output-format>: Any of der, pem (default), der2, pem2, msblob, dropbear, opensshsingle, hexa, gpg22, gpg23.\n'
+        '-outform <output-format>: Any of der, pem (default), der2, pem2, msblob, dropbear, opensshsingle, opensshld, hexa, gpg22, gpg23.\n'
         '-inform <input-format>: Ignored. Autodetected instead.\n'
         '-keyid <key-id>: Selects GPG key to load from file. Omit to get a list.\n'
         .replace('%s', argv[0]))
