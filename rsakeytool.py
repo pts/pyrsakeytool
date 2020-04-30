@@ -13,6 +13,10 @@ type python2.4 >/dev/null 2>&1 && exec python2.4 -- "$0" ${1+"$@"}
 exec python -- ${1+"$@"}; exit 1  # Just for the error message.
 
 This script needs Python 2.4, 2.5, 2.6, 2.7 or 3.x.
+
+See usage on https://github.com/pts/pyrsakeytool
+
+TODO(pts): Add public key output: PEM and OpenSSH.
 """
 
 import binascii
@@ -1954,6 +1958,7 @@ def main(argv):
         '-outform <output-format>: Any of der, pem (default), der2, pem2, msblob, dropbear, openssh (also opensshsingle, opensshld, opensshbin), hexa, gpg22, gpg23.\n'
         '-inform <input-format>: Ignored. Autodetected instead.\n'
         '-keyid <key-id>: Selects GPG key to load from file. Omit to get a list.\n'
+        'See details on https://github.com/pts/pyrsakeytool\n'
         .replace('%s', argv[0]))
     sys.exit(1)
   i = 1
