@@ -18,13 +18,8 @@ This script needs Python 2.4, 2.5, 2.6, 2.7 or 3.x.
 import binascii
 import struct
 
-# --- ASN.1 DER and PEM.
 
-try:
-  long
-  integer_types = (int, long)
-except NameError:
-  integer_types = (int,)
+# -- Python 2.x and 3.x compatibility for strings.
 
 
 try:
@@ -47,6 +42,16 @@ bbnl = bb('\n')
 bbz = bb('\0')
 
 
+# -- Python 2.x and 3.x compatibility for integers.
+
+
+try:
+  long
+  integer_types = (int, long)
+except NameError:
+  integer_types = (int,)
+
+
 def uint_to_any_be(value, is_low=False, is_hex=False,
                     _bbz=bbz, _bb0=bb('0'), _bb8=bb('8'), _bb00=bb('00'), _bbpx=bb('%x')):
   if value < 0:
@@ -57,6 +62,7 @@ def uint_to_any_be(value, is_low=False, is_hex=False,
     try:
       value = _bbpx % value
     except TypeError:  # Python 3.0--3.4.
+      # In Python 2, we'd have to do hex(value).rstrip('L').
       value = bytes(hex(value), 'ascii')[2:]
     if len(value) & 1:
       value = _bb0 + value
@@ -76,6 +82,24 @@ else:
     if data:
       return int(data, 16)
     return 0
+
+
+if getattr(0, 'bit_length', None):  # Python 2.7, Python 3.1--.
+  def get_uint_byte_size(value):
+    if value < 0:
+      raise ValueError('Negative uint for byte size.')
+    return ((value.bit_length() or 1) + 7) >> 3
+else:
+  def get_uint_byte_size(value):
+    if value < 0:
+      raise ValueError('Negative uint for byte size.')
+    # hex(value) is 1.361 times faster than '%x' % value on Python 2.4.
+    # hex(value) is 2.130 times faster than '%x' % value on Python 3.0.
+    value = hex(value)
+    return (len(value) - (1 + (value.endswith('L')))) >> 1
+
+
+# --- ASN.1 DER and PEM.
 
 
 def der_field(xtype, args, _bbe=bbe):
@@ -610,6 +634,469 @@ def is_rsa_private_key_complete(d, effort=None):
         # With `if effort >= 5' we could check that prime1 and prime2 are
         # primes.
   return True
+
+
+# --- Hashes.
+
+
+try:
+  new_sha1 = __import__('hashlib').sha1  # Python 2.5--.
+except (ImportError, AttributeError):
+  try:
+    new_sha1 = __import__('sha').sha  # Python 2.4.
+  except (ImportError, AttributeError):
+    new_sha1 = None
+if not new_sha1:
+  raise ImportError('SHA-1 hash implementation not found.')
+
+
+try:
+  new_sha256 = __import__('hashlib').sha256
+except (ImportError, AttributeError):
+  new_sha256 = None
+
+if not new_sha256:
+  def _sha256_rotr32(x, y):
+    return ((x >> y) | (x << (32 - y))) & 0xffffffff
+
+
+  _sha256_k = (
+      0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5,
+      0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+      0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
+      0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+      0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc,
+      0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+      0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+      0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+      0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13,
+      0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+      0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3,
+      0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+      0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5,
+      0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+      0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
+      0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2)
+
+
+  def slow_sha256_process(block, hh, _izip=__import__('itertools').izip, _rotr32=_sha256_rotr32, _k=_sha256_k):
+    w = [0] * 64
+    w[:16] = struct.unpack('>16L', block)
+    for i in xrange(16, 64):
+      w[i] = (w[i - 16] + (_rotr32(w[i - 15], 7) ^ _rotr32(w[i - 15], 18) ^ (w[i - 15] >> 3)) + w[i - 7] + (_rotr32(w[i - 2], 17) ^ _rotr32(w[i - 2], 19) ^ (w[i - 2] >> 10))) & 0xffffffff
+    a, b, c, d, e, f, g, h = hh
+    for i in xrange(64):
+      t1 = h + (_rotr32(e, 6) ^ _rotr32(e, 11) ^ _rotr32(e, 25)) + ((e & f) ^ ((~e) & g)) + _k[i] + w[i]
+      t2 = (_rotr32(a, 2) ^ _rotr32(a, 13) ^ _rotr32(a, 22)) + ((a & b) ^ (a & c) ^ (b & c))
+      a, b, c, d, e, f, g, h = (t1 + t2) & 0xffffffff, a, b, c, (d + t1) & 0xffffffff, e, f, g
+    return [(x + y) & 0xffffffff for x, y in _izip(hh, (a, b, c, d, e, f, g, h))]
+
+
+  del _sha256_rotr32, _sha256_k  # Unpollute namespace.
+
+
+  # Fallback pure Python implementation of SHA-256 based on
+  # https://github.com/thomdixon/pysha2/blob/master/sha2/sha256.py
+  # It is about 400+ times slower than OpenSSL's C implementation.
+  #
+  # This is used in Python 2.4 by default. (Python 2.5 already has
+  # hashlib.sha256.)
+  #
+  # Most users shouldn't be using this, because it's too slow in production
+  # (as used in pbkdf2). Python 2.4 users are encouraged to upgrade to
+  # Python >=2.5, install hashlib or pycrypto from PyPi, all of which
+  # contain a faster SHA-256 implementation in C.
+  class Slow_sha256(object):
+    _h0 = (0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+           0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19)
+
+    block_size = 64
+    digest_size = 32
+
+    __slots__ = ('_buffer', '_counter', '_h')
+
+    def __init__(self, m=None, _bbe=bbe):
+      self._buffer = bbe
+      self._counter = 0
+      self._h = self._h0
+      if m is not None:
+        self.update(m)
+
+    def update(self, m):
+      if not isinstance(m, bytes):
+        raise TypeError('update() argument 1 must be string, not %s' % (type(m).__name__))
+      if not m:
+        return
+      buf, process = self._buffer, slow_sha256_process
+      lb, lm = len(buf), len(m)
+      self._counter += lm
+      self._buffer = None
+      if lb + lm < 64:
+        buf += bytes(m)
+        self._buffer = buf
+      else:
+        hh, i, _buffer = self._h, 0, buffer
+        if lb:
+          assert lb < 64
+          i = 64 - lb
+          hh = process(buf + bytes(m[:i]), hh)
+        for i in xrange(i, lm - 63, 64):
+          hh = process(_buffer(m, i, 64), hh)
+        self._h = hh
+        self._buffer = bytes(m[lm - ((lm - i) & 63):])
+
+    def digest(self):
+      c = self._counter
+      if (c & 63) < 56:
+        return struct.pack('>8L', *slow_sha256_process(self._buffer + struct.pack('>B%dxQ' % (55 - (c & 63)), 0x80, c << 3), self._h))
+      else:
+        return struct.pack('>8L', *slow_sha256_process(struct.pack('>56xQ', c << 3), slow_sha256_process(self._buffer + struct.pack('>B%dx' % (~c & 63), 0x80), self._h)))
+
+    def hexdigest(self):
+      return to_hex_str(self.digest())
+
+    def copy(self):
+      other = type(self)()
+      other._buffer, other._counter, other._h = self._buffer, self._counter, self._h
+      return other
+
+  new_sha256 = Slow_sha256
+
+
+# -- GPG private key and private subkey serialization.
+
+
+def emsa_pkcs1_v1_5(t, n):
+  # https://tools.ietf.org/html/rfc3447#section-9.2
+  n_size, t_size = get_uint_byte_size(n), get_uint_byte_size(t)
+  if n_size < t_size + 11:
+    raise Value('n is too short.')
+  # Same but slower: return -1 & ((1 << ((n_size << 3) - 15)) - (1 << ((t_size + 1) << 3))) | t
+  return (1 << ((n_size << 3) - 15)) - ((1 << ((t_size + 1) << 3)) - t)
+
+
+# (hash_name, hash_algo, hash_size, asn1_header).
+# https://tools.ietf.org/html/draft-ietf-openpgp-rfc4880bis-09#section-5.2.2
+# TODO(pts): Add md5 and sha*.
+GPG_HASH_INFOS = {
+    'sha1': ('sha1', 2, 20, binascii.unhexlify('3021300906052b0e03021a05000414'), new_sha1),
+    # 3031: sequence of 49 bytes
+    #   300D: sequence of 13 bytes
+    #     0609: oid of 9 bytes
+    #       608648016503040201: OID of SHA-256
+    #     0500: None
+    #   0420: uint of 32 bytes
+    #     ????????????????????????????????????????????????????????????????: sha256_hexdigest
+    'sha256': ('sha256', 8, 32, binascii.unhexlify('3031300d060960864801650304020105000420'), new_sha256),
+}
+
+
+def get_gpg_hash_info(hash_name):
+  hash_name = hash_name.lower().replace('-', '')
+  if hash_name not in GPG_HASH_INFOS:
+    raise ValueError('Unknown hash: %r' % hash)
+  return GPG_HASH_INFOS[hash_name]
+
+
+def build_gpg_signature_digest(hash_name, public_key_packet_data, second_packet_data, hashed_subpackets_data, signature_type):
+  # https://tools.ietf.org/html/draft-ietf-openpgp-rfc4880bis-09#section-5.2.4
+  # write_signature_packets(...) and hash_sigversion_to_magic(...) in gnupg-1.4.16/g10/sign.c
+  hash_name, hash_algo, hash_size, asn1_header, hash_cons = get_gpg_hash_info(hash_name)
+  h = hash_cons()
+  h.update(struct.pack('>BH', 0x99, len(public_key_packet_data)))
+  h.update(public_key_packet_data)
+  if signature_type == 0x18:
+    h.update(struct.pack('>BH', 0x99, len(second_packet_data)))
+  elif 0x10 <= signature_type <= 0x13:
+    h.update(struct.pack('>BL', 0xb4, len(second_packet_data)))
+  else:
+    raise ValueError('Bad signature type: 0x%x' % signature_type)
+  h.update(second_packet_data)
+  public_key_algo = 1  # RSA.
+  h.update(struct.pack('>BBBBH', 4, signature_type, public_key_algo, hash_algo, len(hashed_subpackets_data)))
+  h.update(hashed_subpackets_data)
+  h.update(struct.pack('>HL', 0x04ff, 6 + len(hashed_subpackets_data)))
+  hd = h.digest()
+  return asn1_header + hd, hd[:2]
+
+
+OCTDIGIT_BITCOUNT = {bb('0'): 1, bb('1'): 1, bb('2'): 2, bb('3'): 2, bb('4'): 3, bb('5'): 3, bb('6'): 3, bb('7'): 3}
+
+
+def append_gpg_mpi(output, value, _bb0=bb('0'), _bb8=bb('8'), _bb00=bb('00'), _bbpx=bb('%x')):
+  """Returns a GPG MPI representation of uint value."""
+  if not isinstance(value, integer_types):
+    raise ValueError
+  if value < 0:
+    raise TypeError('Negative GPG MPI.')
+  try:
+    value = _bbpx % value
+  except TypeError:  # Python 3.0--3.4.
+    value = bytes(hex(value), 'ascii')[2:]
+  if len(value) & 1:
+    value = _bb0 + value
+  bitsize = -8
+  if value.startswith(_bb0):
+    c, bitsize = value[1 : 2], -8
+  else:
+    c, bitsize = value[:1], -4
+  bitsize += OCTDIGIT_BITCOUNT.get(c, 4)
+  data = binascii.unhexlify(value)
+  bitsize += len(data) << 3
+  if bitsize >> 16:
+    raise TypeError('GPG MPI too long.')
+  output.append(struct.pack('>H', bitsize))
+  output.append(data)
+
+
+def build_gpg_rsa_public_key_packet_data(d, creation_time=None, _bbe=bbe, _bbz=bbz):
+  """Returns the packet bytes without the tag and size header."""
+  if not isinstance(d.get('creation_time'), integer_types):
+    raise ValueError('Bad or missing GPG RSA public key creation time.')
+  # https://tools.ietf.org/html/draft-ietf-openpgp-rfc4880bis-09#section-5.5.2
+  public_key_algo = 1  # RSA.
+  if creation_time is None:
+    creation_time = d['creation_time']
+  output = [struct.pack('>BLB', 4, creation_time, public_key_algo)]
+  append_gpg_mpi(output, d['modulus'])
+  append_gpg_mpi(output, d['public_exponent'])
+  return _bbe.join(output)
+
+
+def build_gpg_rsa_private_key_packet_data(d, _bbe=bbe, _bbz=bbz):
+  """Returns the packet bytes without the tag and size header."""
+  if not isinstance(d.get('creation_time'), integer_types):
+    raise ValueError('Bad or missing GPG RSA private key creation time.')
+  public_key_algo = 1  # RSA.
+  output = [struct.pack('>BLB', 4, d['creation_time'], public_key_algo)]
+  append_gpg_mpi(output, d['modulus'])
+  append_gpg_mpi(output, d['public_exponent'])
+  output.append(bbz)  # Unprotected.
+  i = len(output)
+  append_gpg_mpi(output, d['private_exponent'])
+  append_gpg_mpi(output, d['prime2'])
+  append_gpg_mpi(output, d['prime1'])
+  append_gpg_mpi(output, d['coefficient'])
+  output.append(struct.pack('>H', sum(sum(struct.unpack('>%dB' % len(x), x)) for x in output[i:]) & 0xffff))
+  return _bbe.join(output)
+
+
+def rsa_encrypt(d, data):
+  """Takes bytes or uint, returns a uint."""
+  if isinstance(data, bytes):
+    x = emsa_pkcs1_v1_5(uint_from_be(data), d['modulus'])
+  elif isinstance(data, integer_types):
+    x = data
+  else:
+    raise TypeError
+  if 'coefficient' in d:  # Fastest to compute, because mp1 and mp2 modular exponentiation have small (half-size) modulus.
+    mp1 = pow(x, d.get('exponent1') or d['private_exponent'] % (d['prime1'] - 1), d['prime1'])
+    mp2 = pow(x, d.get('exponent2') or d['private_exponent'] % (d['prime2'] - 1), d['prime2'])
+    # For additional speedup, we could also cache d['prime2'] * d['coefficient'] % d['modulus'].
+    return (mp2 + d['prime2'] * d['coefficient'] * (mp1 - mp2)) % d['modulus']
+  else:
+    return pow(x, d['private_exponent'], d['modulus'])
+
+
+def build_gpg_rsa_signature_packet_data(d, signature_type, public_subkey_packet_data, hash_name, public_key_packet_data, hashed_subpackets_data, unhashed_subpackets_data, _bbe=bbe):
+  public_key_algo = 1  # RSA.
+  digest, digest_prefix2 = build_gpg_signature_digest(hash_name, public_key_packet_data, public_subkey_packet_data, hashed_subpackets_data, signature_type)
+  hash_algo = get_gpg_hash_info(hash_name)[1]
+  output = [struct.pack('>BBBBH', 4, signature_type, public_key_algo, hash_algo, len(hashed_subpackets_data)), hashed_subpackets_data,
+            struct.pack('>H', len(unhashed_subpackets_data)), unhashed_subpackets_data, digest_prefix2]
+  append_gpg_mpi(output, rsa_encrypt(d, digest))  # RSA signature.
+  return _bbe.join(output)
+
+
+# https://tools.ietf.org/html/draft-ietf-openpgp-rfc4880bis-09#section-5.2.3.22
+GPG_KEY_FLAG_CERTIFY = 1
+GPG_KEY_FLAG_SIGN = 2
+GPG_KEY_FLAG_ENCRYPT = 4 | 8
+GPG_KEY_FLAG_AUTHENTICATE = 32
+
+
+def build_gpg_key_id20(public_key_packet_data):
+  h = new_sha1()
+  h.update(struct.pack('>BH', 0x99, len(public_key_packet_data)))
+  h.update(public_key_packet_data)
+  key_id20 = h.digest()
+  assert len(key_id20) == 20
+  return key_id20
+
+
+def build_gpg_subpacket_from_uint8s(subpacket_type, values):
+  if len(values) > 191:
+    raise ValueError('Too many int values in subpacket.')
+  return struct.pack('>%dB' % (len(values) + 2), len(values) + 1, subpacket_type, *values)
+
+
+def build_gpg_subkey_rsa_signature_packet_data(d, public_subkey_packet_data, hash_name, public_key_packet_data=None, key_id20=None, subkey_flags=GPG_KEY_FLAG_ENCRYPT, signature_creation_time=None, _bbv4=bb('\4')):
+  # https://tools.ietf.org/html/draft-ietf-openpgp-rfc4880bis-09#section-5.2.3
+  if not isinstance(d.get('creation_time'), integer_types):
+    raise ValueError('Bad or missing GPG RSA private key creation time.')
+  if not isinstance(public_subkey_packet_data, bytes):
+    raise TypeError
+  if not (public_subkey_packet_data.startswith(_bbv4) and len(public_subkey_packet_data) >= 8):
+    raise ValueError('Bad public subkey packet data.')
+  if signature_creation_time is None:
+    signature_creation_time, = struct.unpack('>L', public_subkey_packet_data[1 : 5])
+  if public_key_packet_data is None:
+    public_key_packet_data = build_gpg_rsa_public_key_packet_data(d)
+  if key_id20 is None:
+    key_id20 = build_gpg_key_id20(public_key_packet_data)
+  hashed_subpackets_data = struct.pack('>HB20sHLHB', 0x1621, 4, key_id20, 0x0502, signature_creation_time, 0x021B, subkey_flags)
+  unhashed_subpackets_data = struct.pack('>H8s', 0x0910, key_id20[-8:])
+  signature_type = 0x18  # Subkey Binding Signature.
+  return build_gpg_rsa_signature_packet_data(d, signature_type, public_subkey_packet_data, hash_name, public_key_packet_data, hashed_subpackets_data, unhashed_subpackets_data)
+
+
+def build_gpg_userid_cert_rsa_signature_packet_data(d, hash_name, public_key_packet_data=None, key_id20=None,
+                                                    key_flags=GPG_KEY_FLAG_CERTIFY | GPG_KEY_FLAG_SIGN,
+                                                    signature_type=0x13,  # Positive certification of a User ID and Public-Key packet.
+                                                    preferred_cipher_algos=(9, 8, 7, 2),  preferred_hash_algos=(8, 9, 10, 11, 2), preferred_compress_algos=(2, 3, 1),
+                                                    signature_creation_time=None, _bbe=bbe):
+  # https://tools.ietf.org/html/draft-ietf-openpgp-rfc4880bis-09#section-5.2.3
+  if not isinstance(d.get('creation_time'), integer_types):
+    raise ValueError('Bad or missing GPG RSA private key creation time.')
+  if not isinstance(d.get('comment'), bytes):
+    raise ValueError('Bad or missing GPG RSA private key userid comment.')
+  if not isinstance(signature_type, integer_types):
+    raise TypeError
+  if not 0x10 <= signature_type <= 0x13:
+    raise ValueError('Bad GPG userid cert signature type: 0x%x' % signature_type)
+  if signature_creation_time is None:
+    signature_creation_time = d['creation_time']
+  if public_key_packet_data is None:
+    public_key_packet_data = build_gpg_rsa_public_key_packet_data(d)
+  if key_id20 is None:
+    key_id20 = build_gpg_key_id20(public_key_packet_data)
+  features = (1,)
+  keyserver_preferences = (0x80,)
+  if isinstance(key_flags, integer_types):
+    key_flags = (key_flags,)
+  hashed_subpackets_data = _bbe.join((
+      struct.pack('>HB20sHL', 0x1621, 4, key_id20, 0x0502, signature_creation_time),
+      build_gpg_subpacket_from_uint8s(27, key_flags),
+      build_gpg_subpacket_from_uint8s(11, preferred_cipher_algos),
+      build_gpg_subpacket_from_uint8s(21, preferred_hash_algos),
+      build_gpg_subpacket_from_uint8s(22, preferred_compress_algos),
+      build_gpg_subpacket_from_uint8s(30, features),
+      build_gpg_subpacket_from_uint8s(23, keyserver_preferences),
+  ))
+  unhashed_subpackets_data = struct.pack('>H8s', 0x0910, key_id20[-8:])
+  return build_gpg_rsa_signature_packet_data(d, signature_type, d['comment'], hash_name, public_key_packet_data, hashed_subpackets_data, unhashed_subpackets_data)
+
+
+def build_gpg_packet_header(packet_type, size, _pack=struct.pack):
+  if not 1 <= packet_type <= 63:
+    raise ValueError('Invalid GPG packet type: %d' % packet_type)
+  if size < 0:
+    raise ValueError('To-be-created GPG packet has negative size.')
+  elif size < 256 and packet_type < 16:
+    return _pack('>BB', 128 | (packet_type << 2), size)
+  elif size < 192:
+    return _pack('>BB', 192 | packet_type, size)
+  elif size < 65536 and packet_type < 16:
+    return _pack('>BH', 129 | (packet_type << 2), size)
+  elif size < 8192 + 192:
+    b = size - 192
+    return _pack('>BBB', 192 | packet_type, 192 | b >> 8, b & 255)
+  elif size >> 32:
+    raise ValueError('To-be-created GPG packet too large.')
+  elif packet_type < 16:
+    return _pack('>BL', 130 | (packet_type << 2), size)
+  else:
+    return _pack('>BBL', 192 | packet_type, 255, size)
+
+
+def skip_gpg_mpis(data, i, mpi_count):
+  while mpi_count > 0:
+    mpi_count -= 1
+    # https://tools.ietf.org/html/draft-ietf-openpgp-rfc4880bis-09#section-3.2
+    if i + 2 > len(data):
+      raise ValueError('GPG MPI too short.')
+    bitsize, = struct.unpack('>H', data[i : i + 2])
+    i += 2
+    #if not bitsize:  # Let's be permissive.
+    #  raise ValueError('Empty GPG MPI.')
+    size = (bitsize + 7) >> 3
+    if i + size > len(data):
+      raise ValueError('GPG MPI data too short.')
+    i += size
+  return i
+
+
+def skip_gpg_key_pstrings(data, i, pstring_count):
+  while pstring_count > 0:
+    # https://tools.ietf.org/html/draft-ietf-openpgp-rfc4880bis-09#section-5.6.6
+    pstring_count -= 1
+    if i >= len(data):
+      raise ValueError('GPG key pstring too short.')
+    size, = struct.unpack('>B', data[i : i + 1])
+    i += 1
+    if size == 0 or size == 0xff:
+      raise ValueError('Bad GPG key pstring size: 0x%x' % size)
+    if i + size > len(data):
+      raise ValueError('GPG key pstring too short.')
+    i += size
+  return i
+
+
+def get_gpg_public_key_packet_size(data, i=0):
+  """Input is private key packet data or public key packet data."""
+  if i + 6 > len(data):
+    raise ValueError('EOF in GPG key packet header.')
+  version, creation_time, public_key_algo = struct.unpack('>BLB', data[i : i + 6])
+  if version != 4:
+    raise ValueError('Unsupported GPG key packet version: %d' % version)
+  i += 6
+  # https://tools.ietf.org/html/draft-ietf-openpgp-rfc4880bis-09#section-5.6
+  # https://tools.ietf.org/html/draft-ietf-openpgp-rfc4880bis-09#section-9.1
+  if public_key_algo == 1:  # RSA.
+    i = skip_gpg_mpis(data, i, 2)
+  elif public_key_algo == 17:  # DSA.
+    i = skip_gpg_mpis(data, i, 4)
+  elif public_key_algo == 16:  # Elgamal.
+    i = skip_gpg_mpis(data, i, 3)
+  elif public_key_algo == 18:  # ECDH.
+    # https://tools.ietf.org/html/draft-ietf-openpgp-rfc4880bis-09#section-5.6.6
+    i = skip_gpg_key_pstrings(data, i, 1)
+    i = skip_gpg_mpis(data, i, 1)
+    i = skip_gpg_key_pstrings(data, i, 1)
+  elif public_key_algo in (19, 22):  # (ECDSA, EdDSA)
+    i = skip_gpg_key_pstrings(data, i, 1)
+    i = skip_gpg_mpis(data, i, 1)
+  else:
+    raise ValueError('Unknown GPG public key algo: %d' % public_key_algo)
+  return i
+
+
+def build_gpg_export_secret_key_data(d, d_sub, hash_name='sha256', _bbe=bbe):
+  """Returns bytes in `gpg --export-secret-key ...' format."""
+  # TODO(pts): Add expiry. Now these keys never expire.
+  private_key_packet_data = build_gpg_rsa_private_key_packet_data(d)
+  if isinstance(d_sub, bytes):
+    private_subkey_packet_data = d_sub
+  elif isinstance(d_sub, dict):
+    private_subkey_packet_data = build_gpg_rsa_private_key_packet_data(d_sub)
+    # True but slow: assert build_gpg_rsa_public_key_packet_data(d_sub) == private_subkey_packet_data[:get_gpg_public_key_packet_size(private_subkey_packet_data)]
+  else:
+    raise TypeError
+  public_subkey_packet_data = private_subkey_packet_data[:get_gpg_public_key_packet_size(private_subkey_packet_data)]
+  public_key_packet_data = private_key_packet_data[:get_gpg_public_key_packet_size(private_key_packet_data)]
+  key_id20 = build_gpg_key_id20(public_key_packet_data)
+  userid_cert_signature_packet_data = build_gpg_userid_cert_rsa_signature_packet_data(d, hash_name, public_key_packet_data, key_id20)
+  subkey_signature_packet_data = build_gpg_subkey_rsa_signature_packet_data(d, public_subkey_packet_data, hash_name, public_key_packet_data, key_id20)
+  return _bbe.join((
+      build_gpg_packet_header(5, len(private_key_packet_data)), private_key_packet_data,
+      build_gpg_packet_header(13, len(d['comment'])), d['comment'],
+      build_gpg_packet_header(2, len(userid_cert_signature_packet_data)), userid_cert_signature_packet_data,
+      build_gpg_packet_header(7, len(private_subkey_packet_data)), private_subkey_packet_data,
+      build_gpg_packet_header(2, len(subkey_signature_packet_data)), subkey_signature_packet_data,
+  ))
+
+
+# --- Serialization and parsing.
 
 
 def serialize_rsa_der(d):
