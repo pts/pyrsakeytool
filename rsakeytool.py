@@ -1850,9 +1850,9 @@ def convert_rsa_data(d, format='pem', effort=None, keyid=None,
       return serialize_rsa_msblob(d)
     if format == 'hexa':
       return serialize_rsa_hexa(d)
-    if format in 'gpg22':
+    if format == 'gpg22':
       return serialize_rsa_gpg22(d)
-    if format in 'gpg23':
+    if format == 'gpg23':
       return serialize_rsa_gpg23(d)
     if format not in ('der', 'pem', 'der2', 'pem2'):
       raise ValueError('Unknown RSA private key format: %r' % (format,))
