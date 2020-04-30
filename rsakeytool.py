@@ -1072,20 +1072,28 @@ def get_gpg_public_key_packet_size(data, i=0):
 
 
 def build_gpg_export_secret_key_data(d, d_sub, hash_name='sha256', _bbe=bbe):
-  """Returns bytes in `gpg --export-secret-key ...' format."""
+  """Returns bytes in `gpg --export-secret-key ...' format, can be imported with `gpg --import <...'"""
   # TODO(pts): Add expiry. Now these keys never expire.
   private_key_packet_data = build_gpg_rsa_private_key_packet_data(d)
+  public_key_packet_data = private_key_packet_data[:get_gpg_public_key_packet_size(private_key_packet_data)]
+  key_id20 = build_gpg_key_id20(public_key_packet_data)
   if isinstance(d_sub, bytes):
     private_subkey_packet_data = d_sub
   elif isinstance(d_sub, dict):
     private_subkey_packet_data = build_gpg_rsa_private_key_packet_data(d_sub)
     # True but slow: assert build_gpg_rsa_public_key_packet_data(d_sub) == private_subkey_packet_data[:get_gpg_public_key_packet_size(private_subkey_packet_data)]
+  elif d_sub is None:  # Build it without a subkey.  It is unusual to have no subkey, but we can do it.
+    userid_cert_signature_packet_data = build_gpg_userid_cert_rsa_signature_packet_data(
+        d, hash_name, public_key_packet_data, key_id20, key_flags=GPG_KEY_FLAG_CERTIFY | GPG_KEY_FLAG_SIGN | GPG_KEY_FLAG_ENCRYPT)
+    return _bbe.join((
+        build_gpg_packet_header(5, len(private_key_packet_data)), private_key_packet_data,
+        build_gpg_packet_header(13, len(d['comment'])), d['comment'],
+        build_gpg_packet_header(2, len(userid_cert_signature_packet_data)), userid_cert_signature_packet_data,
+    ))
   else:
-    raise TypeError
-  public_subkey_packet_data = private_subkey_packet_data[:get_gpg_public_key_packet_size(private_subkey_packet_data)]
-  public_key_packet_data = private_key_packet_data[:get_gpg_public_key_packet_size(private_key_packet_data)]
-  key_id20 = build_gpg_key_id20(public_key_packet_data)
+    raise TypeError('Bad subkey type: %r' % type(d_sub))
   userid_cert_signature_packet_data = build_gpg_userid_cert_rsa_signature_packet_data(d, hash_name, public_key_packet_data, key_id20)
+  public_subkey_packet_data = private_subkey_packet_data[:get_gpg_public_key_packet_size(private_subkey_packet_data)]
   subkey_signature_packet_data = build_gpg_subkey_rsa_signature_packet_data(d, public_subkey_packet_data, hash_name, public_key_packet_data, key_id20)
   return _bbe.join((
       build_gpg_packet_header(5, len(private_key_packet_data)), private_key_packet_data,
