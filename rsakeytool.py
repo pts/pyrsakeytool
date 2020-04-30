@@ -662,8 +662,7 @@ def parse_rsa_der_header(data, i=0, _bb30=bb('\x30')):
 
 
 def parse_rsa_pem(data,
-                  _bbe=bbe, _bbd=bb('-'),
-                  _bb30=bb('\x30'), _bb50=bb('\5\0'), _bbbegin=bb('\n-----BEGIN '), _bbend=bb('\n-----END '), _bbnl=bbnl, _bbcolon=bb(':'),
+                  _bbe=bbe, _bbd=bb('-'), _bbbegin=bb('\n-----BEGIN '), _bbend=bb('\n-----END '), _bbnl=bbnl, _bbcolon=bb(':'),
                   _bbencrypted=bb('ENCRYPTED '), _bbrsapk=bb('RSA PRIVATE KEY-----\n'), _bbopensshpk=bb('OPENSSH PRIVATE KEY-----\n'), _bbpk=bb('PRIVATE KEY-----\n')):
   # PEM format. Used by both `openssl rsa' (and web servers) and OpenSSH.
   if data.startswith(_bbbegin[1:]):
