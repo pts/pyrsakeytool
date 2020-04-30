@@ -17,6 +17,7 @@ This script needs Python 2.4, 2.5, 2.6, 2.7 or 3.x.
 See usage on https://github.com/pts/pyrsakeytool
 
 TODO(pts): Add public key output: PEM and OpenSSH.
+TODO(pts): Add input support for format='gpg'.
 """
 
 import binascii
@@ -586,9 +587,10 @@ def get_rsa_private_key(**kwargs):
       'exponent2': private_exponent % (prime2 - 1),
       'coefficient': coefficient,
   }
-  if 'checkint' in kwargs and not isinstance(kwargs['checkint'], integer_types) and kwargs['checkint'] >> 32:
-    raise ValueError('Bad checkint: %r' % (kwargs['checkint'],))
-  for key in ('comment', 'checkint'):
+  for key in ('checkint', 'creation_time'):  # uint32.
+    if key in kwargs and (not isinstance(kwargs[key], integer_types) or 0 > kwargs[key] or kwargs[key] >> 32):
+      raise ValueError('Bad %s: %r' % (key, kwargs[key]))
+  for key in ('comment', 'checkint', 'creation_time'):
     if key in kwargs:
       d.setdefault(key, kwargs[key])
   return d
@@ -1108,6 +1110,11 @@ def build_gpg_export_secret_key_data(d, d_sub, hash_name='sha256', _bbe=bbe):
   ))
 
 
+def is_gpg_userid(comment, _bbemailstart=bb(' <'), _bbemailend=bb('>'), _bbnl=bbnl):
+  # Example good comment: bb('Test Real Name 6 (Comment 6) <testemail6@email.com>').
+  return comment and _bbemailstart in comment and comment.endswith(_bbemailend) and _bbnl not in comment
+
+
 # --- Serialization and parsing.
 
 
@@ -1359,7 +1366,7 @@ def serialize_rsa_msblob(d, _bbe=bbe, _bbz=bbz, _bbmsblob=bbmsblob):
       le_padded(d['private_exponent'], size)))
 
 
-HEXA_KEYS = ('modulus', 'public_exponent', 'private_exponent', 'prime1', 'prime2', 'exponent1', 'exponent2', 'coefficient', 'comment', 'checkint')
+HEXA_KEYS = ('modulus', 'public_exponent', 'private_exponent', 'prime1', 'prime2', 'exponent1', 'exponent2', 'coefficient', 'comment', 'checkint', 'creation_time')
 HEXA_ALIASES = {'n': 'modulus', 'e': 'public_exponent', 'd': 'private_exponent', 'q': 'prime1', 'p': 'prime2', 'u': 'coefficient'}
 
 
@@ -1488,7 +1495,7 @@ def serialize_rsa_hexa(d, _bbassign=bb(' = '), _bb0x=bb('0x'), _bbnl=bbnl, _bbe=
   output = []
   for key in HEXA_KEYS:
     if key not in d:
-      if key not in ('comment', 'checkint'):
+      if key not in ('comment', 'checkint', 'creation_time'):
         raise KeyError('RSA key missing: %r' % key)
       continue
     value = d[key]
@@ -1854,6 +1861,8 @@ def convert_rsa_data(d, format='pem', effort=None, keyid=None,
       return serialize_rsa_gpg22(d)
     if format == 'gpg23':
       return serialize_rsa_gpg23(d)
+    if format == 'gpg':
+      return build_gpg_export_secret_key_data(d, d.get('sub'))
     if format not in ('der', 'pem', 'der2', 'pem2'):
       raise ValueError('Unknown RSA private key format: %r' % (format,))
     d, data = None, serialize_rsa_der(d)
@@ -1952,12 +1961,14 @@ def main(argv):
         'There is NO WARRANTY. Use at your risk.\n'
         'Usage: %s rsa [<flag> ...]\n'
         'Flags:\n'
-        '-dump\n'
-        '-in <input-filename>\n'
-        '-out <output-filename>\n'
-        '-outform <output-format>: Any of der, pem (default), der2, pem2, msblob, dropbear, openssh (also opensshsingle, opensshld, opensshbin), hexa, gpg22, gpg23.\n'
+        '-dump: Print the RSA private key as hex number assignments to stdout.\n'
+        '-in <input-filename>: Read RSA private key from this file.\n'
+        '-out <output-filename>: Write RSA private key to this file, in output format -outform ...\n'
+        '-outform <output-format>: Any of der, pem (default), der2, pem2, msblob, dropbear, openssh (also opensshsingle, opensshld, opensshbin), hexa, gpg (output only), gpg22, gpg23.\n'
         '-inform <input-format>: Ignored. Autodetected instead.\n'
-        '-keyid <key-id>: Selects GPG key to load from file. Omit to get a list.\n'
+        '-keyid <key-id>: Selects GPG key to read from file. Omit to get a list.\n'
+        '-subin <subkey-input-filename>: Read GPG encryption subkey from this file for -outform gpg\n'
+        '-comment <comment>: For the specified comment in the output file. Makes a difference for -outform hexa|openssh|gpg\n'
         'See details on https://github.com/pts/pyrsakeytool\n'
         .replace('%s', argv[0]))
     sys.exit(1)
@@ -1967,7 +1978,7 @@ def main(argv):
     #sys.exit(1)
     i += 1
 
-  keyid = infn = outfn = None
+  keyid = infn = outfn = subinfn = comment = None
   format = 'pem'
   while i < len(argv):
     arg = argv[i]
@@ -1975,7 +1986,7 @@ def main(argv):
     if arg == '-dump':
       format = 'dict'
       continue
-    if arg not in ('-in', '-out', '-outform', '-inform', '-keyid'):
+    if arg not in ('-in', '-subin', '-out', '-outform', '-inform', '-keyid', '-comment'):
       sys.stderr.write('fatal: unknown flag (use --help): %s\n' % arg)
       sys.exit(1)
     if i == len(argv):
@@ -1985,10 +1996,14 @@ def main(argv):
     i += 1
     if arg == '-in':
       infn = value
+    elif arg == '-subin':
+      subinfn = value
     elif arg == '-out':
       outfn = value
     elif arg == '-keyid':
       keyid = value.upper()
+    elif arg == '-comment':
+      comment = value
     elif arg == '-outform':
       if value == 'dict':
         sys.stderr.write('fatal: -outform dict not supported on the command-line\n')
@@ -2008,12 +2023,45 @@ def main(argv):
   if outfn is not None and format == 'dict':
     sys.stderr.write('fatal: unexpected -out ... for -dump\n')
     sys.exit(1)
+  if subinfn is not None and format != 'gpg':
+    sys.stderr.write('fatal: -subin needs -outform gpg\n')
+    sys.exit(1)
 
   f = open(infn, 'rb')
   try:
     data = f.read()  # TODO(pts): Limit to 1 MiB etc., but not for gpg(1).
   finally:
     f.close()
+  if comment is not None:
+    data = convert_rsa_data(data, 'dict', effort=0)
+    # TODO(pts): Allow non-ASCII comment bytes (e.g. UTF-8 or locale default)?
+    data['comment'] = bb(comment)
+  if format == 'gpg':
+    data = convert_rsa_data(data, 'dict', effort=0)
+    if not data.get('comment'):
+      sys.stderr.write('fatal: specify user ID as -comment ... for -outform gpg\n')
+      sys.exit(2)
+    if not is_gpg_userid(data['comment']):
+      sys.stderr.write('info: example good GPG user ID: -comment "Test Real Name 6 (Comment 6) <testemail6@email.com>"\n')
+      sys.stderr.write('fatal: bad GPG user ID: %s\n' % repr(data['comment']).lstrip(bb('b')))
+      sys.exit(2)
+    if 'creation_time' not in data:
+      import time
+      data['creation_time'] = int(time.time())
+  if subinfn is None:
+    if format == 'gpg':
+      sys.stderr.write('warning: encryption subkey (-subin ...) is strongly recommended for -outform gpg\n')
+  else:
+    f = open(subinfn, 'rb')
+    try:
+      subdata = f.read()
+    finally:
+      f.close()
+    data = convert_rsa_data(data, 'dict', effort=0)
+    data['sub'] = convert_rsa_data(subdata, 'dict')
+    data['sub'].setdefault('creation_time', data['creation_time'])
+    del subdata  # Save memory.
+
   if format == 'dict':  # -dump.
     sys.stdout.write(aa(convert_rsa_data(data, 'hexa', keyid=keyid)))
     sys.stdout.flush()

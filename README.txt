@@ -71,4 +71,17 @@ https://github.com/pts/gpg-export-secret-key-unprotected):
   modulus = 0x...
   ...
 
+Example for building a GPG RSA key and subkey manually and adding to GPG:
+
+  $ openssl genrsa -out key6.pem 4096
+  $ openssl genrsa -out subkey6.pem 4096
+  $ ./rsakeytool.py rsa -in key6.pem -subin subkey6.pem -outform gpg -out key6.bin -comment "Test Real Name 6 (Comment 6) <testemail6@email.com>"
+  $ gpg --import <key6.bin
+  # Add ultimate trust for encryption to work without confirmation.
+  $ (echo 5; echo y; echo save) |
+    gpg --expert --command-fd 0 --yes --no-tty --no-greeting --quiet --edit-key "$(gpg --list-packets <key6.bin | awk '$1=="keyid:"{print$2;exit}')" trust
+  $ echo hello | gpg -e -r testemail6 >hello.bin
+  $ gpg -d -q <hello.bin
+  hello
+
 __END__
