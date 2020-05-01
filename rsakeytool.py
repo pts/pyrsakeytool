@@ -1868,14 +1868,28 @@ def convert_rsa_data(d, format='pem', effort=None, keyid=None,
     d, data = None, serialize_rsa_der(d)
   if not (isinstance(data, bytes) and d is None):
     raise TypeError
-  if format == 'der':
+  if format in ('der', 'pkcs1der'):
+    # PKCS #1 ASN.1 RSA private key: https://tools.ietf.org/html/rfc8017#appendix-A.1.2
+    # DER: https://en.wikipedia.org/wiki/X.690#DER_encoding
     return data
-  if format == 'pem':
+  if format in ('pem', 'pkcs1', 'pkcs1pem'):
+    # PKCS #1 ASN.1 RSA private key: https://tools.ietf.org/html/rfc8017#appendix-A.1.2
+    # PEM: https://en.wikipedia.org/wiki/Privacy-Enhanced_Mail
+    # https://linuxsecurity.com/resource_files/cryptography/ssl-and-certificates.html
+    # This is the ``traditional'' RSA private key format used by OpenSSL,
+    # it's also called as the ``SSLeay format''. According to
+    # https://crypto.stackexchange.com/a/47433/ , there is no well-known
+    # standard.
     return _bbe.join((bb('-----BEGIN RSA PRIVATE KEY-----\n'), base64_encode(data), bb('\n-----END RSA PRIVATE KEY-----\n')))
   data = der_value((0, (DER_OID_RSA_ENCRYPTION, None), der_bytes(data)))
-  if format == 'der2':
+  if format in ('der2', 'pkcs8der'):
+    # PKCS #8: https://en.wikipedia.org/wiki/PKCS_8
+    # DER: https://en.wikipedia.org/wiki/X.690#DER_encoding
     return data
-  if format == 'pem2':
+  if format in ('pem2', 'pkcs8', 'pkcs8pem'):
+    # PKCS #8: https://en.wikipedia.org/wiki/PKCS_8
+    # PEM: https://en.wikipedia.org/wiki/Privacy-Enhanced_Mail
+    # Chapter 10: https://tools.ietf.org/html/rfc7468#section-10
     return _bbe.join((bb('-----BEGIN PRIVATE KEY-----\n'), base64_encode(data), bb('\n-----END PRIVATE KEY-----\n')))
 
 
@@ -1964,7 +1978,7 @@ def main(argv):
         '-dump: Print the RSA private key as hex number assignments to stdout.\n'
         '-in <input-filename>: Read RSA private key from this file.\n'
         '-out <output-filename>: Write RSA private key to this file, in output format -outform ...\n'
-        '-outform <output-format>: Any of der, pem (default), der2, pem2, msblob, dropbear, openssh (also opensshsingle, opensshld, opensshbin), hexa, gpg (output only), gpg22, gpg23.\n'
+        '-outform <output-format>: Any of pem == pkcs1pem (default), pkcs8pem, pcks1der, pkcs8der, msblob, dropbear, openssh (also opensshsingle, opensshld, opensshbin), hexa, gpg (output only), gpg22, gpg23.\n'
         '-inform <input-format>: Ignored. Autodetected instead.\n'
         '-keyid <key-id>: Selects GPG key to read from file. Omit to get a list.\n'
         '-subin <subkey-input-filename>: Read GPG encryption subkey from this file for -outform gpg\n'
