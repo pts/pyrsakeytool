@@ -218,6 +218,20 @@ class RsakeytoolTest(unittest.TestCase):
     self.assertEqual(bb('7f0123456789abcd'), binascii.hexlify(f(a >> 8, True)))
     self.assertEqual(bb('00800123456789abcd'), binascii.hexlify(f(b >> 8, True)))
 
+  def test_append_gpg_mpi(self):
+    def f(value):
+      output = [bb('=')]
+      rsakeytool.append_gpg_mpi(output, value)
+      return bb('').join(output)
+    a = 0x7f0123456789abcdef
+    b = 0x800123456789abcdef
+    self.assertEqual(bb('3d00477f0123456789abcdef'), binascii.hexlify(f(a)))
+    self.assertEqual(bb('3d0048800123456789abcdef'), binascii.hexlify(f(b)))
+    self.assertEqual(bb('3d004307f0123456789abcde'), binascii.hexlify(f(a >> 4)))
+    self.assertEqual(bb('3d00440800123456789abcde'), binascii.hexlify(f(b >> 4)))
+    self.assertEqual(bb('3d003f7f0123456789abcd'), binascii.hexlify(f(a >> 8)))
+    self.assertEqual(bb('3d0040800123456789abcd'), binascii.hexlify(f(b >> 8)))
+
   def test_convert(self):
     d = get_test_rsa_key()
     assert rsakeytool.is_rsa_private_key_complete(d)
