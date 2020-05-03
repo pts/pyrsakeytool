@@ -115,6 +115,22 @@ else:
     return (len(value) - (1 + (value.endswith('L')))) >> 1
 
 
+if getattr(0, 'bit_length', None):  # Python 2.7, Python 3.1--.
+  def get_uint_bitsize(value):
+    if value < 0:
+      raise ValueError('Negative uint for bitsize.')
+    return value.bit_length() or 1
+else:
+  def get_uint_bitsize(value, _octdigit_bitcount={'0': -3, '1': -3, '2': -2, '3': -2, '4': -1, '5': -1, '6': -1, '7': -1}):
+    if value < 0:
+      raise ValueError('Negative uint for bitsize.')
+    # hex(value) is 1.361 times faster than '%x' % value on Python 2.4.
+    # hex(value) is 2.130 times faster than '%x' % value on Python 3.0.
+    value = hex(value)
+    result = (len(value) - (2 + (value.endswith('L')))) << 2
+    return result + _octdigit_bitcount.get(value[2 : 3], 0)
+
+
 # --- ASN.1 DER and PEM.
 
 

@@ -218,6 +218,30 @@ class RsakeytoolTest(unittest.TestCase):
     self.assertEqual(bb('7f0123456789abcd'), binascii.hexlify(f(a >> 8, True)))
     self.assertEqual(bb('00800123456789abcd'), binascii.hexlify(f(b >> 8, True)))
 
+  def test_get_uint_bitsize(self):
+    f = rsakeytool.get_uint_bitsize
+    self.assertEqual(1, f(0))
+    self.assertEqual(1, f(1))
+    self.assertEqual(2, f(2))
+    self.assertEqual(2, f(3))
+    self.assertEqual(3, f(4))
+    self.assertEqual(3, f(7))
+    self.assertEqual(4, f(8))
+    self.assertEqual(4, f(15))
+    self.assertEqual(5, f(16))
+    self.assertEqual(5, f(31))
+    self.assertEqual(6, f(32))
+    self.assertEqual(6, f(63))
+    self.assertEqual(7, f(64))
+    self.assertEqual(7, f(127))
+    self.assertEqual(8, f(128))
+    self.assertEqual(8, f(255))
+    self.assertEqual(9, f(256))
+    self.assertEqual(9, f(511))
+    self.assertEqual(10, f(512))
+    self.assertEqual(16, f(65535))
+    self.assertEqual(17, f(65536))
+
   def test_append_gpg_mpi(self):
     def f(value):
       output = [bb('=')]
