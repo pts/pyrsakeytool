@@ -56,26 +56,37 @@ try:
 except NameError:
   integer_types = (int,)
 
-
-def uint_to_any_be(value, is_low=False, is_hex=False,
-                    _bbz=bbz, _bb0=bb('0'), _bb8=bb('8'), _bb00=bb('00'), _bbpx=bb('%x')):
-  if value < 0:
-    raise ValueError('Bad negative uint.')
-  if not (is_low or is_hex) and value <= 0xffffffffffffffff:
-    return struct.pack('>Q', value).lstrip(_bbz) or _bbz
-  else:
-    try:
-      value = _bbpx % value
-    except TypeError:  # Python 3.0--3.4.
-      # In Python 2, we'd have to do hex(value).rstrip('L').
-      value = bytes(hex(value), 'ascii')[2:]
-    if len(value) & 1:
-      value = _bb0 + value
-    elif is_low and not _bb0 <= value[:1] < _bb8:
-      value = _bb00 + value
-    if is_hex:
-      return value
-    return binascii.unhexlify(value)
+try:
+  (0).to_bytes  # Python 3.2--. Faster than below.
+  def uint_to_any_be(value, is_low=False):
+    if value < 0:
+      raise ValueError('Bad negative uint.')
+    bitsize = value.bit_length() or 1
+    if is_low:  # Prepend a bb('\0') to values with high 7 bit set.
+      size = (bitsize >> 3) + 1
+    else:
+      size = (bitsize + 7) >> 3
+    return value.to_bytes(size, 'big')
+except AttributeError:
+  def uint_to_any_be(value, is_low=False,
+                      _bbz=bbz, _bb0=bb('0'), _bb8=bb('8'), _bb00=bb('00'), _is_hex_bytes=isinstance(hex(0), bytes)):
+    if value < 0:
+      raise ValueError('Bad negative uint.')
+    if not is_low and value <= 0xffffffffffffffff:
+      return struct.pack('>Q', value).lstrip(_bbz) or _bbz
+    else:
+      if _is_hex_bytes:
+        # In Python 2.4--2.7, '%x' % value is 4.327% slower than hex(value)[2:], but
+        # ('%x' % value).rstrip('L') and variants are slower than either.
+        value = '%x' % value
+      else:
+        # In Python 3.5--, b'%x' % value is 3.185% faster than bytes(hex(value)[2:], 'ascii').
+        value = bytes(hex(value), 'ascii')[2:]
+      if len(value) & 1:
+        value = _bb0 + value
+      elif is_low and not _bb0 <= value[:1] < _bb8:
+        value = _bb00 + value
+      return binascii.unhexlify(value)
 
 
 if getattr(int, 'from_bytes', None):
@@ -341,7 +352,9 @@ def append_gpg22_uint(output, prefix, value, _bbcolon=bb(':')):
 
 
 def gpg23_uint(value):
-  return uint_to_any_be(value, True, is_hex=True).upper()
+  # This call is 2.779%..18.41% slower than a solution based on b('%x') %
+  # value in Python 3.5--. We don't mind the small speed decrease.
+  return binascii.hexlify(uint_to_any_be(value, True)).upper()
 
 
 def parse_gpg23_uint(data, i, j, _bbhash=bb('#')):
@@ -836,7 +849,7 @@ def append_gpg_mpi(output, value, _bb0=bb('0'), _bb8=bb('8'), _bb00=bb('00'), _b
   if value < 0:
     raise TypeError('Negative GPG MPI.')
   try:
-    value = _bbpx % value
+    value = _bbpx % value  # !! hex(value) is faster.
   except TypeError:  # Python 3.0--3.4.
     value = bytes(hex(value), 'ascii')[2:]
   if len(value) & 1:

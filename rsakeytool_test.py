@@ -199,6 +199,25 @@ class RsakeytoolTest(unittest.TestCase):
     self.assertRaises(ValueError, f, bb("b'\\308'"))
     self.assertRaises(ValueError, f, bb("b'\\400'"))
 
+  def test_uint_to_any_be(self):
+    f = rsakeytool.uint_to_any_be
+    a = 0x7f0123456789abcdef
+    b = 0x800123456789abcdef
+    self.assertEqual(bb('00'), binascii.hexlify(f(0)))
+    self.assertEqual(bb('01'), binascii.hexlify(f(1)))
+    self.assertEqual(bb('7f0123456789abcdef'), binascii.hexlify(f(a)))
+    self.assertEqual(bb('800123456789abcdef'), binascii.hexlify(f(b)))
+    self.assertEqual(bb('7f0123456789abcdef'), binascii.hexlify(f(a, True)))
+    self.assertEqual(bb('00800123456789abcdef'), binascii.hexlify(f(b, True)))
+    self.assertEqual(bb('07f0123456789abcde'), binascii.hexlify(f(a >> 4)))
+    self.assertEqual(bb('0800123456789abcde'), binascii.hexlify(f(b >> 4)))
+    self.assertEqual(bb('07f0123456789abcde'), binascii.hexlify(f(a >> 4, True)))
+    self.assertEqual(bb('0800123456789abcde'), binascii.hexlify(f(b >> 4, True)))
+    self.assertEqual(bb('7f0123456789abcd'), binascii.hexlify(f(a >> 8)))
+    self.assertEqual(bb('800123456789abcd'), binascii.hexlify(f(b >> 8)))
+    self.assertEqual(bb('7f0123456789abcd'), binascii.hexlify(f(a >> 8, True)))
+    self.assertEqual(bb('00800123456789abcd'), binascii.hexlify(f(b >> 8, True)))
+
   def test_convert(self):
     d = get_test_rsa_key()
     assert rsakeytool.is_rsa_private_key_complete(d)
@@ -281,7 +300,6 @@ class RsakeytoolTest(unittest.TestCase):
     self.assertEqual(gpg_export_secret_key_data0, rsakeytool.build_gpg_export_secret_key_data(d, D_SUB))
     gpg_export_secret_key_data1 = binascii.unhexlify('9501d80455f12345010400b54dd426fb9641c9f7caa294bb7da157d83d376c7eadc44e937f8870654355067029730c02e28a9d4752a5c6069717a03d8b4b1f7199da1da29d542c42361ca0f3720aa78c659fbf55f7d9d18dce8052c2da1b610506451faaf565258df9c8f783a422826ad6d28e1f98bd3a4f08120eea8be67aaffb91580c103008683403c5001101000100040092fa6237ac1376880dea66fcde360d7b5260e6327d4bcf6dc7e346af9f580370b1b2d8826f404a1110c5ee7fe7cdcb286b5c25ed7ac1b7f1f86744da905e9fbb795fcc7cbc47af9eeac4f555820472e1e9eb4e17c017a1462fbd3efac7e78b2813593a9f1f546b418849930d4f968ddc4455d3767e5e45638a0b16bccb6be6ad0200cb7946393798bdcc2c5c9d8baf9cbd33255d06a4aad5eb5b1f630dd316029dc59ea9dbb3a5268dd63a533d4ac1e01059927e6c16c6eb71ef61eb658d6d1baa6f0200e41b738589bf944e9d72961ed9e6be7b4854b501d2f00aadad3dafda01f5b7d40d6fd179fb647b1987899678e4ca4f3e3b0cc54f9c6d2ecb8c07b66bf4c3df0b0200a0530e72144d8de540059c209f6c64975b55ca81f539a23daa17cbbc724345e6c9168a637cd33e006110a97d8a2c3812dfb069431d14a301b6fc5866fa8b77439e60b43354657374205265616c204e616d6520352028436f6d6d656e74203529203c74657374656d61696c3540656d61696c2e636f6d3e88ce041301080038162104a2d68183cb4d58902218916f901bf337b182bae5050255f12345021b0f050b09080702061508090a0b020416020301021e01021780000a0910901bf337b182bae51ee303ff6d468141a7a02fe06184c8fbd8eb3e040d11adb72ade4f6123a11513c7dbeb336b69779285fc088586a869978c26506c0934d64df265d7d426f8b3849d73bab073eb8293e76703332e3fbbf314e14adc1ef2f8322858cb68306bb317d1b5160861acf922db7e50c313e5e2e22234ea4f93b53b9356611d7d24fa803b65d85546')
     self.assertEqual(gpg_export_secret_key_data1, rsakeytool.build_gpg_export_secret_key_data(d, d_sub=None))
-
 
 if __name__ == '__main__':
   unittest.main(argv=[sys.argv[0], '-v'] + sys.argv[1:])
