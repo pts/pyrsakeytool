@@ -855,33 +855,14 @@ def build_gpg_signature_digest(hash_name, public_key_packet_data, second_packet_
   return asn1_header + hd, hd[:2]
 
 
-OCTDIGIT_BITCOUNT = {bb('0'): 1, bb('1'): 1, bb('2'): 2, bb('3'): 2, bb('4'): 3, bb('5'): 3, bb('6'): 3, bb('7'): 3}
-
-
-def append_gpg_mpi(output, value, _bb0=bb('0'), _bb8=bb('8'), _bb00=bb('00'), _bbpx=bb('%x')):
+def append_gpg_mpi(output, value):
   """Returns a GPG MPI representation of uint value."""
   if not isinstance(value, integer_types):
     raise ValueError
   if value < 0:
     raise TypeError('Negative GPG MPI.')
-  try:
-    value = _bbpx % value  # !! hex(value) is faster.
-  except TypeError:  # Python 3.0--3.4.
-    value = bytes(hex(value), 'ascii')[2:]
-  if len(value) & 1:
-    value = _bb0 + value
-  bitsize = -8
-  if value.startswith(_bb0):
-    c, bitsize = value[1 : 2], -8
-  else:
-    c, bitsize = value[:1], -4
-  bitsize += OCTDIGIT_BITCOUNT.get(c, 4)
-  data = binascii.unhexlify(value)
-  bitsize += len(data) << 3
-  if bitsize >> 16:
-    raise TypeError('GPG MPI too long.')
-  output.append(struct.pack('>H', bitsize))
-  output.append(data)
+  output.append(struct.pack('>H', get_uint_bitsize(value)))
+  output.append(uint_to_any_be(value))
 
 
 def build_gpg_rsa_public_key_packet_data(d, creation_time=None, _bbe=bbe, _bbz=bbz):
