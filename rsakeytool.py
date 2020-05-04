@@ -678,9 +678,15 @@ try:
   new_sha1 = __import__('hashlib').sha1  # Python 2.5--.
 except (ImportError, AttributeError):
   try:
-    new_sha1 = __import__('sha').sha  # Python 2.4.
+    new_sha1 = __import__('_hashlib').openssl_sha1  # Some half-installed Python 3.1 packages have this.
   except (ImportError, AttributeError):
-    new_sha1 = None
+    try:
+      new_sha1 = __import__('_sha1').sha1  # Some half-installed Python 3.1 packages have this.
+    except (ImportError, AttributeError):
+      try:
+        new_sha1 = __import__('sha').sha  # Python 2.4.
+      except (ImportError, AttributeError):
+        new_sha1 = None
 if not new_sha1:
   raise ImportError('SHA-1 hash implementation not found.')
 
