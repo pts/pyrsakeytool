@@ -814,7 +814,7 @@ def emsa_pkcs1_v1_5(t, n):
 # https://tools.ietf.org/html/draft-ietf-openpgp-rfc4880bis-09#section-5.2.2
 # TODO(pts): Add md5 and sha*.
 GPG_HASH_INFOS = {
-    'sha1': ('sha1', 2, 20, binascii.unhexlify('3021300906052b0e03021a05000414'), new_sha1),
+    'sha1': ('sha1', 2, 20, binascii.unhexlify(bb('3021300906052b0e03021a05000414')), new_sha1),
     # 3031: sequence of 49 bytes
     #   300D: sequence of 13 bytes
     #     0609: oid of 9 bytes
@@ -822,7 +822,7 @@ GPG_HASH_INFOS = {
     #     0500: None
     #   0420: uint of 32 bytes
     #     ????????????????????????????????????????????????????????????????: sha256_hexdigest
-    'sha256': ('sha256', 8, 32, binascii.unhexlify('3031300d060960864801650304020105000420'), new_sha256),
+    'sha256': ('sha256', 8, 32, binascii.unhexlify(bb('3031300d060960864801650304020105000420')), new_sha256),
 }
 
 
