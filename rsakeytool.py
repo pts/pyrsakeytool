@@ -1137,7 +1137,7 @@ def build_gpg_export_secret_key_data(d, d_sub, hash_name='sha256', _bbe=bbe):
 
 def is_gpg_userid(comment, _bbemailstart=bb(' <'), _bbemailend=bb('>'), _bbnl=bbnl):
   # Example good comment: bb('Test Real Name 6 (Comment 6) <testemail6@email.com>').
-  return comment and _bbemailstart in comment and comment.endswith(_bbemailend) and _bbnl not in comment
+  return comment and (comment.startswith(_bbemailstart[1:]) or _bbemailstart in comment) and comment.endswith(_bbemailend) and _bbnl not in comment
 
 
 # --- Serialization and parsing.
