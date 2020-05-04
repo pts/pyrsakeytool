@@ -1888,7 +1888,7 @@ def convert_rsa_data(d, format='pem', effort=None, keyid=None,
       return serialize_rsa_gpg23(d)
     if format == 'gpg':
       return build_gpg_export_secret_key_data(d, d.get('sub'))
-    if format not in ('der', 'pem', 'der2', 'pem2'):
+    if format not in ('der', 'pem', 'der2', 'pem2', 'pcks1der', 'pcks1', 'pkcs1pem', 'pkcs8der', 'pkcs8', 'pkcs8pem'):
       raise ValueError('Unknown RSA private key format: %r' % (format,))
     d, data = None, serialize_rsa_der(d)
   if not (isinstance(data, bytes) and d is None):
