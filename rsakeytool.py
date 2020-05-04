@@ -1,6 +1,5 @@
 #! /bin/sh
 # by pts@fazekas.hu at Sat Apr 25 01:21:50 CEST 2020
-#
 
 """:" # rsakeytool.py: Convert between various RSA private key formats.
 
@@ -16,8 +15,9 @@ This script needs Python 2.4, 2.5, 2.6, 2.7 or 3.x.
 
 See usage on https://github.com/pts/pyrsakeytool
 
-TODO(pts): Add public key output: PEM and OpenSSH.
+TODO(pts): Add public key output: PEM, OpenSSH, GPG.
 TODO(pts): Add input support for format='gpg'.
+TODO(pts): Add command-line parsing compatible with ssh-keygen.
 """
 
 import binascii
