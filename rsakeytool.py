@@ -554,7 +554,6 @@ def get_rsa_private_key(**kwargs):
       # From (public_exponent, modulus, coefficient):
       #   No answer yet on https://crypto.stackexchange.com/q/80254/
       raise ValueError('Needed (at least 2 of modulus, prime1, prime2) or (prime1, coefficient) or (modulus, public_exponent, private_exponent).')
-  coefficient = None  # Ignore until recalculated below.
   if not modulus:
     modulus = prime1 * prime2
   elif not prime1:
@@ -577,12 +576,13 @@ def get_rsa_private_key(**kwargs):
     raise ValueError('Primes are too small.')
   if modulus != prime1 * prime2:
     raise ValueError('Mismatch in modulus vs primes.')
-  try:
-    coefficient = modinv(prime2, prime1)
-  except ValueError:
-    coefficient = None
-  if coefficient is None:
-    raise ValueError('Primes are not coprimes.')
+  if not (coefficient and prime2 * coefficient % prime1 == 1):
+    try:
+      coefficient = modinv(prime2, prime1)
+    except ValueError:
+      coefficient = None
+    if coefficient is None:
+      raise ValueError('Primes are not coprimes.')
   pp1 = (prime1 - 1) * (prime2 - 1)
   lcm = pp1 // gcd(prime1 - 1, prime2 - 1)
   if ec < 1:
