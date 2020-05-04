@@ -138,6 +138,8 @@ if isinstance(zip(), list):
 else:
   izip = zip
 
+if not isinstance(range(0), list):
+  xrange = range  # Python 3.x doesn't have xrange.
 
 # --- ASN.1 DER and PEM.
 
