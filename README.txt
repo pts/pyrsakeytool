@@ -1,12 +1,13 @@
-rsakeytool.py: Convert between various RSA private key formats
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-rsakeytool.py is a command-line tool written in Python to convert between
-various RSA private key formats (e.g. PEM, DER, Microsoft, OpenSSH,
-Dropbear, GPG 2.2 .key, GPG 2.3 .key). It can also read RSA private keys
-exported from GPG. The command-line interface is compatible with of
+rsakeytool.py: RSA private key generator and converter
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+rsakeytool.py is a command-line tool written in Python to generate RSA
+priate keys, and convert between various RSA private key formats (e.g. PEM,
+DER, Microsoft, OpenSSH, Dropbear, GPG 2.2 .key, GPG 2.3 .key). It can also
+read RSA private keys exported from GPG. The command-line interface is
+compatible with of `openssl genrsa', `openssl genpkey' and
 `openssl rsa ...'.
 
-Extra features over `openssl rsa ...':
+Extra features over openssl(1):
 
 * rsakeytool.py can read and write more file formats (e.g. Dropbear).
 * rsakeytool.py autodetects the input file format.
@@ -17,6 +18,8 @@ Extra features over `openssl rsa ...':
   with the `-outform pem2' flag. The default is
   PEM ``-----BEGIN RSA PRIVATE KEY-----' (`openssl genrsa'), matching the
   `openssl rsa' default.
+* rsakeytool.py can generate very small keys, as low as bitsize 4. (The
+  minimum for openssl(1) is bitsize 16, other tools have minimum 1024.)
 
 Missing features:
 
@@ -36,6 +39,10 @@ OpenSSH also supports PEM, but recent versions of ssh-keygen generate the
 custom OpenSSH format (~/.ssh/id_rsa). PEM is an ASCII (with base64) format.
 DER is the eqivalent binary format. Both of these formats serialize values
 using ASN.1. Other formats (such as OpeNSSH and Microsoft) dont' use ASN.1.
+
+Example usage for generating an RSA private key:
+
+  $ ./rsakeytool.py genrsa -out key.pem 2048
 
 Example usage for dumping hex integer values to stdout:
 
@@ -71,17 +78,22 @@ https://github.com/pts/gpg-export-secret-key-unprotected):
   modulus = 0x...
   ...
 
-Example for building a GPG RSA key and subkey manually and adding to GPG:
+Example for generating GPG RSA private key (including subkey) and adding it
+to GPG:
 
-  $ openssl genrsa -out key6.pem 4096
-  $ openssl genrsa -out subkey6.pem 4096
-  $ ./rsakeytool.py rsa -in key6.pem -subin subkey6.pem -outform gpg -out key6.bin -comment "Test Real Name 6 (Comment 6) <testemail6@email.com>"
+  $ ./rsakeytool.py genrsa -outform gpg -out key6.bin -comment "Test Real Name 6 (Comment 6) <testemail6@email.com>" 4096
   $ gpg --import <key6.bin
   # Add ultimate trust for encryption to work without confirmation.
   $ (echo 5; echo y; echo save) |
-    gpg --expert --command-fd 0 --yes --no-tty --no-greeting --quiet --edit-key "$(gpg --list-packets <key6.bin | awk '$1=="keyid:"{print$2;exit}')" trust
+    gpg --command-fd 0 --yes --no-tty --no-greeting --quiet --edit-key "$(gpg --list-packets <key6.bin | awk '$1=="keyid:"{print$2;exit}')" trust
   $ echo hello | gpg -e -r testemail6 >hello.bin
   $ gpg -d -q <hello.bin
   hello
+
+Example for building a GPG RSA key and subkey manually:
+
+  $ openssl genrsa -out key6.pem 4096  # Same as ./rsakeytool.py ...
+  $ ./rsakeytool.py genrsa -out subkey6.pem 4096  # Slow, may take 30 seconds.
+  $ ./rsakeytool.py rsa -in key6.pem -subin subkey6.pem -outform gpg -out key6.bin -comment "Test Real Name 6 (Comment 6) <testemail6@email.com>"
 
 __END__

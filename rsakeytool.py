@@ -680,6 +680,647 @@ def is_rsa_private_key_complete(d, effort=None):
   return True
 
 
+# --- Random byte generation.
+
+
+def _get_random_bytes_urandom(size):
+  import os
+  return os.urandom(size)
+
+
+def _get_random_bytes_winrandom(size):
+  from ctypes import wintypes
+  import ctypes
+  PROV_RSA_FULL = 1
+  s = cryptes.create_string_buffer(size)
+  ok = ctypes.c_int()
+  hProv = ctypes.c_ulong()
+  ok = ctypes.windll.Advapi32.CryptAcquireContextA(ctypes.byref(hProv), None, None, PROV_RSA_FULL, 0)
+  ok = ctypes.windll.Advapi32.CryptGenRandom(hProv, wintypes.DWORD(size), ctypes.cast(ctypes.byref(s), ctypes.POINTER(ctypes.c_byte)))
+  if not ok:
+    raise RuntimeError('Random generation failed.')
+  return s.raw
+
+
+def _get_random_bytes_python(size, _bbe=bbe, _pack=struct.pack):
+  import random
+  return _bbe.join(_pack('>B', random.randrange(0, 255)) for _ in xrange(size))
+
+
+def get_random_bytes(size, _cache=[]):
+  if not _cache:
+    try:
+      import os
+      if not isinstance(os.urandom(1), bytes):
+        raise ValueError
+      _cache.append(_get_random_bytes_urandom)
+    except (ImportError, AttributeError, ValueError, OSError, IOError, RuntimeError):
+      try:
+        from ctypes import wintypes
+        import ctypes
+        ctypes.windll.Advapi32.CryptAcquireContextA
+        _cache.append(_get_random_bytes_winrandom)
+      except (ImportError, AttributeError, ValueError, OSError, IOError, RuntimeError):
+        _cache.append(_get_random_bytes_python)
+  return _cache[0](size)
+
+
+def get_random_uint_in_range(start, limit):
+  """Returns random integer in the range: start <= result < limit."""
+  d = limit - start
+  if d <= 1:
+    if d <= 0:
+      raise ValueError('Empty range.')
+    return start
+  while 1:
+    bitsize = get_uint_bitsize(d - 1)
+    value = uint_from_be(get_random_bytes((bitsize + 7) >> 3))
+    if bitsize & 7:
+      value &= (1 << bitsize) - 1
+    if value < d:
+      return value + start
+
+
+# --- RSA private key generation.
+
+
+# Based on OpenSSL 1.1.0l BN_prime_checks_for_size.
+# https://en.wikipedia.org/wiki/Miller%E2%80%93Rabin_primality_test#Testing_against_small_sets_of_bases
+def get_miller_rabin_round_count_for_bitsize(bitsize):
+  if bitsize >= 3747:
+    return 3
+  elif bitsize >= 1345:
+    return 4
+  elif bitsize >= 476:
+    return 5
+  elif bitsize >= 400:
+    return 6
+  elif bitsize >= 347:
+    return 7
+  elif bitsize >= 308:
+    return 8
+  elif bitsize >= 55:
+    return 27
+
+
+BASE_PRIMES = (2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41)
+
+ACCURATE_MILLER_RABIN_LIMIT = 3317044064679887385961981
+
+
+def get_accurate_miller_rabin_bases(n):
+  # https://oeis.org/A006945/list
+  # https://en.wikipedia.org/wiki/Miller%E2%80%93Rabin_primality_test#Testing_against_small_sets_of_bases
+  if n < 2152302898747:
+    if n < 2047:
+      c = 1
+    elif n < 1373653:
+      c = 2
+    elif n < 25326001:
+      c = 3
+    elif n < 3215031751:
+      c = 4
+    elif n < 4759123141:
+      return (2, 7, 61)
+    else:  # elif n < 2152302898747:
+      c = 5
+  else:
+    if n < 3474749660383:
+      c = 6
+    elif c < 341550071728321:
+      c = 7
+    elif n < 3825123056546413051:
+      c = 9
+    elif n < 318665857834031151167461:
+      c = 12
+    elif n < 3317044064679887385961981:
+      c = 13
+    else:
+      raise ValueError('n is too large for accurate Miller-Rabin bases.')
+  return BASE_PRIMES[:c]
+
+
+def get_yield_miller_rabin_bases(n, bitsize=None):
+  if n < ACCURATE_MILLER_RABIN_LIMIT:
+    if n < 3:
+      raise ValueError('n is too small for Miller-Rabin.')
+    return iter(get_accurate_miller_rabin_bases(n))
+  else:
+    if bitsize is None:
+      bitsize = get_uint_bitsize(n)
+    round_count = get_miller_rabin_round_count_for_bitsize(bitsize)
+    n3 = n - 3
+    def yield_bases():
+      c = round_count
+      while c > 0:
+        c -= 1
+        yield 2 + get_random_uint_in_range(0, n3)
+    return yield_bases()
+
+
+def is_prime_miller_rabin(n, bitsize=None):
+  if n <= BASE_PRIMES[-1]:
+    # TODO(pts): Is bisect faster?
+    return n > 1 and n in BASE_PRIMES
+  if not (n & 1):
+    return n == 2
+  n1, k0 = n - 1, 1
+  while not (n1 & (1 << k0)):
+    k0 += 1
+  n2 = n1 >> k0
+  for a in get_yield_miller_rabin_bases(n, bitsize):
+    # This pow(a, n2, n) call is the slowest step in generate_rsa (for
+    # bitsize=2048 it's 64.85%, for bitsize=4096 it's 88.19%, for
+    # bitsize=8192 it's 96.51%; here bitsize= is the argument of
+    # generate_rsa).
+    #
+    # TODO(pts): Do Montgomery setup for mod n calculations, and use it here.
+    # BN_mod_exp_mont(...) in openssl-1.1.0l/crypto/bn/bn_exp.c
+    p = pow(a, n2, n)
+    if p != 1 and p != n1:
+      k = k0
+      while k > 0:
+        p = (p * p) % n
+        if p == 1:
+          return False  # Composite.
+        if p == n1:
+          break  # May be prime. Won't `return False' below.
+        k -= 1
+      if not k:
+        return False  # Composite (non-prime).
+  return True  # Probably prime.
+
+
+SIEVE_PRIMES = (  # 2048 primes if 2 and 3 ares prepended.
+    5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53, 59, 61, 67, 71,
+    73, 79, 83, 89, 97, 101, 103, 107, 109, 113, 127, 131, 137, 139, 149, 151,
+    157, 163, 167, 173, 179, 181, 191, 193, 197, 199, 211, 223, 227, 229, 233,
+    239, 241, 251, 257, 263, 269, 271, 277, 281, 283, 293, 307, 311, 313, 317,
+    331, 337, 347, 349, 353, 359, 367, 373, 379, 383, 389, 397, 401, 409, 419,
+    421, 431, 433, 439, 443, 449, 457, 461, 463, 467, 479, 487, 491, 499, 503,
+    509, 521, 523, 541, 547, 557, 563, 569, 571, 577, 587, 593, 599, 601, 607,
+    613, 617, 619, 631, 641, 643, 647, 653, 659, 661, 673, 677, 683, 691, 701,
+    709, 719, 727, 733, 739, 743, 751, 757, 761, 769, 773, 787, 797, 809, 811,
+    821, 823, 827, 829, 839, 853, 857, 859, 863, 877, 881, 883, 887, 907, 911,
+    919, 929, 937, 941, 947, 953, 967, 971, 977, 983, 991, 997, 1009, 1013,
+    1019, 1021, 1031, 1033, 1039, 1049, 1051, 1061, 1063, 1069, 1087, 1091,
+    1093, 1097, 1103, 1109, 1117, 1123, 1129, 1151, 1153, 1163, 1171, 1181,
+    1187, 1193, 1201, 1213, 1217, 1223, 1229, 1231, 1237, 1249, 1259, 1277,
+    1279, 1283, 1289, 1291, 1297, 1301, 1303, 1307, 1319, 1321, 1327, 1361,
+    1367, 1373, 1381, 1399, 1409, 1423, 1427, 1429, 1433, 1439, 1447, 1451,
+    1453, 1459, 1471, 1481, 1483, 1487, 1489, 1493, 1499, 1511, 1523, 1531,
+    1543, 1549, 1553, 1559, 1567, 1571, 1579, 1583, 1597, 1601, 1607, 1609,
+    1613, 1619, 1621, 1627, 1637, 1657, 1663, 1667, 1669, 1693, 1697, 1699,
+    1709, 1721, 1723, 1733, 1741, 1747, 1753, 1759, 1777, 1783, 1787, 1789,
+    1801, 1811, 1823, 1831, 1847, 1861, 1867, 1871, 1873, 1877, 1879, 1889,
+    1901, 1907, 1913, 1931, 1933, 1949, 1951, 1973, 1979, 1987, 1993, 1997,
+    1999, 2003, 2011, 2017, 2027, 2029, 2039, 2053, 2063, 2069, 2081, 2083,
+    2087, 2089, 2099, 2111, 2113, 2129, 2131, 2137, 2141, 2143, 2153, 2161,
+    2179, 2203, 2207, 2213, 2221, 2237, 2239, 2243, 2251, 2267, 2269, 2273,
+    2281, 2287, 2293, 2297, 2309, 2311, 2333, 2339, 2341, 2347, 2351, 2357,
+    2371, 2377, 2381, 2383, 2389, 2393, 2399, 2411, 2417, 2423, 2437, 2441,
+    2447, 2459, 2467, 2473, 2477, 2503, 2521, 2531, 2539, 2543, 2549, 2551,
+    2557, 2579, 2591, 2593, 2609, 2617, 2621, 2633, 2647, 2657, 2659, 2663,
+    2671, 2677, 2683, 2687, 2689, 2693, 2699, 2707, 2711, 2713, 2719, 2729,
+    2731, 2741, 2749, 2753, 2767, 2777, 2789, 2791, 2797, 2801, 2803, 2819,
+    2833, 2837, 2843, 2851, 2857, 2861, 2879, 2887, 2897, 2903, 2909, 2917,
+    2927, 2939, 2953, 2957, 2963, 2969, 2971, 2999, 3001, 3011, 3019, 3023,
+    3037, 3041, 3049, 3061, 3067, 3079, 3083, 3089, 3109, 3119, 3121, 3137,
+    3163, 3167, 3169, 3181, 3187, 3191, 3203, 3209, 3217, 3221, 3229, 3251,
+    3253, 3257, 3259, 3271, 3299, 3301, 3307, 3313, 3319, 3323, 3329, 3331,
+    3343, 3347, 3359, 3361, 3371, 3373, 3389, 3391, 3407, 3413, 3433, 3449,
+    3457, 3461, 3463, 3467, 3469, 3491, 3499, 3511, 3517, 3527, 3529, 3533,
+    3539, 3541, 3547, 3557, 3559, 3571, 3581, 3583, 3593, 3607, 3613, 3617,
+    3623, 3631, 3637, 3643, 3659, 3671, 3673, 3677, 3691, 3697, 3701, 3709,
+    3719, 3727, 3733, 3739, 3761, 3767, 3769, 3779, 3793, 3797, 3803, 3821,
+    3823, 3833, 3847, 3851, 3853, 3863, 3877, 3881, 3889, 3907, 3911, 3917,
+    3919, 3923, 3929, 3931, 3943, 3947, 3967, 3989, 4001, 4003, 4007, 4013,
+    4019, 4021, 4027, 4049, 4051, 4057, 4073, 4079, 4091, 4093, 4099, 4111,
+    4127, 4129, 4133, 4139, 4153, 4157, 4159, 4177, 4201, 4211, 4217, 4219,
+    4229, 4231, 4241, 4243, 4253, 4259, 4261, 4271, 4273, 4283, 4289, 4297,
+    4327, 4337, 4339, 4349, 4357, 4363, 4373, 4391, 4397, 4409, 4421, 4423,
+    4441, 4447, 4451, 4457, 4463, 4481, 4483, 4493, 4507, 4513, 4517, 4519,
+    4523, 4547, 4549, 4561, 4567, 4583, 4591, 4597, 4603, 4621, 4637, 4639,
+    4643, 4649, 4651, 4657, 4663, 4673, 4679, 4691, 4703, 4721, 4723, 4729,
+    4733, 4751, 4759, 4783, 4787, 4789, 4793, 4799, 4801, 4813, 4817, 4831,
+    4861, 4871, 4877, 4889, 4903, 4909, 4919, 4931, 4933, 4937, 4943, 4951,
+    4957, 4967, 4969, 4973, 4987, 4993, 4999, 5003, 5009, 5011, 5021, 5023,
+    5039, 5051, 5059, 5077, 5081, 5087, 5099, 5101, 5107, 5113, 5119, 5147,
+    5153, 5167, 5171, 5179, 5189, 5197, 5209, 5227, 5231, 5233, 5237, 5261,
+    5273, 5279, 5281, 5297, 5303, 5309, 5323, 5333, 5347, 5351, 5381, 5387,
+    5393, 5399, 5407, 5413, 5417, 5419, 5431, 5437, 5441, 5443, 5449, 5471,
+    5477, 5479, 5483, 5501, 5503, 5507, 5519, 5521, 5527, 5531, 5557, 5563,
+    5569, 5573, 5581, 5591, 5623, 5639, 5641, 5647, 5651, 5653, 5657, 5659,
+    5669, 5683, 5689, 5693, 5701, 5711, 5717, 5737, 5741, 5743, 5749, 5779,
+    5783, 5791, 5801, 5807, 5813, 5821, 5827, 5839, 5843, 5849, 5851, 5857,
+    5861, 5867, 5869, 5879, 5881, 5897, 5903, 5923, 5927, 5939, 5953, 5981,
+    5987, 6007, 6011, 6029, 6037, 6043, 6047, 6053, 6067, 6073, 6079, 6089,
+    6091, 6101, 6113, 6121, 6131, 6133, 6143, 6151, 6163, 6173, 6197, 6199,
+    6203, 6211, 6217, 6221, 6229, 6247, 6257, 6263, 6269, 6271, 6277, 6287,
+    6299, 6301, 6311, 6317, 6323, 6329, 6337, 6343, 6353, 6359, 6361, 6367,
+    6373, 6379, 6389, 6397, 6421, 6427, 6449, 6451, 6469, 6473, 6481, 6491,
+    6521, 6529, 6547, 6551, 6553, 6563, 6569, 6571, 6577, 6581, 6599, 6607,
+    6619, 6637, 6653, 6659, 6661, 6673, 6679, 6689, 6691, 6701, 6703, 6709,
+    6719, 6733, 6737, 6761, 6763, 6779, 6781, 6791, 6793, 6803, 6823, 6827,
+    6829, 6833, 6841, 6857, 6863, 6869, 6871, 6883, 6899, 6907, 6911, 6917,
+    6947, 6949, 6959, 6961, 6967, 6971, 6977, 6983, 6991, 6997, 7001, 7013,
+    7019, 7027, 7039, 7043, 7057, 7069, 7079, 7103, 7109, 7121, 7127, 7129,
+    7151, 7159, 7177, 7187, 7193, 7207, 7211, 7213, 7219, 7229, 7237, 7243,
+    7247, 7253, 7283, 7297, 7307, 7309, 7321, 7331, 7333, 7349, 7351, 7369,
+    7393, 7411, 7417, 7433, 7451, 7457, 7459, 7477, 7481, 7487, 7489, 7499,
+    7507, 7517, 7523, 7529, 7537, 7541, 7547, 7549, 7559, 7561, 7573, 7577,
+    7583, 7589, 7591, 7603, 7607, 7621, 7639, 7643, 7649, 7669, 7673, 7681,
+    7687, 7691, 7699, 7703, 7717, 7723, 7727, 7741, 7753, 7757, 7759, 7789,
+    7793, 7817, 7823, 7829, 7841, 7853, 7867, 7873, 7877, 7879, 7883, 7901,
+    7907, 7919, 7927, 7933, 7937, 7949, 7951, 7963, 7993, 8009, 8011, 8017,
+    8039, 8053, 8059, 8069, 8081, 8087, 8089, 8093, 8101, 8111, 8117, 8123,
+    8147, 8161, 8167, 8171, 8179, 8191, 8209, 8219, 8221, 8231, 8233, 8237,
+    8243, 8263, 8269, 8273, 8287, 8291, 8293, 8297, 8311, 8317, 8329, 8353,
+    8363, 8369, 8377, 8387, 8389, 8419, 8423, 8429, 8431, 8443, 8447, 8461,
+    8467, 8501, 8513, 8521, 8527, 8537, 8539, 8543, 8563, 8573, 8581, 8597,
+    8599, 8609, 8623, 8627, 8629, 8641, 8647, 8663, 8669, 8677, 8681, 8689,
+    8693, 8699, 8707, 8713, 8719, 8731, 8737, 8741, 8747, 8753, 8761, 8779,
+    8783, 8803, 8807, 8819, 8821, 8831, 8837, 8839, 8849, 8861, 8863, 8867,
+    8887, 8893, 8923, 8929, 8933, 8941, 8951, 8963, 8969, 8971, 8999, 9001,
+    9007, 9011, 9013, 9029, 9041, 9043, 9049, 9059, 9067, 9091, 9103, 9109,
+    9127, 9133, 9137, 9151, 9157, 9161, 9173, 9181, 9187, 9199, 9203, 9209,
+    9221, 9227, 9239, 9241, 9257, 9277, 9281, 9283, 9293, 9311, 9319, 9323,
+    9337, 9341, 9343, 9349, 9371, 9377, 9391, 9397, 9403, 9413, 9419, 9421,
+    9431, 9433, 9437, 9439, 9461, 9463, 9467, 9473, 9479, 9491, 9497, 9511,
+    9521, 9533, 9539, 9547, 9551, 9587, 9601, 9613, 9619, 9623, 9629, 9631,
+    9643, 9649, 9661, 9677, 9679, 9689, 9697, 9719, 9721, 9733, 9739, 9743,
+    9749, 9767, 9769, 9781, 9787, 9791, 9803, 9811, 9817, 9829, 9833, 9839,
+    9851, 9857, 9859, 9871, 9883, 9887, 9901, 9907, 9923, 9929, 9931, 9941,
+    9949, 9967, 9973, 10007, 10009, 10037, 10039, 10061, 10067, 10069, 10079,
+    10091, 10093, 10099, 10103, 10111, 10133, 10139, 10141, 10151, 10159, 10163,
+    10169, 10177, 10181, 10193, 10211, 10223, 10243, 10247, 10253, 10259, 10267,
+    10271, 10273, 10289, 10301, 10303, 10313, 10321, 10331, 10333, 10337, 10343,
+    10357, 10369, 10391, 10399, 10427, 10429, 10433, 10453, 10457, 10459, 10463,
+    10477, 10487, 10499, 10501, 10513, 10529, 10531, 10559, 10567, 10589, 10597,
+    10601, 10607, 10613, 10627, 10631, 10639, 10651, 10657, 10663, 10667, 10687,
+    10691, 10709, 10711, 10723, 10729, 10733, 10739, 10753, 10771, 10781, 10789,
+    10799, 10831, 10837, 10847, 10853, 10859, 10861, 10867, 10883, 10889, 10891,
+    10903, 10909, 10937, 10939, 10949, 10957, 10973, 10979, 10987, 10993, 11003,
+    11027, 11047, 11057, 11059, 11069, 11071, 11083, 11087, 11093, 11113, 11117,
+    11119, 11131, 11149, 11159, 11161, 11171, 11173, 11177, 11197, 11213, 11239,
+    11243, 11251, 11257, 11261, 11273, 11279, 11287, 11299, 11311, 11317, 11321,
+    11329, 11351, 11353, 11369, 11383, 11393, 11399, 11411, 11423, 11437, 11443,
+    11447, 11467, 11471, 11483, 11489, 11491, 11497, 11503, 11519, 11527, 11549,
+    11551, 11579, 11587, 11593, 11597, 11617, 11621, 11633, 11657, 11677, 11681,
+    11689, 11699, 11701, 11717, 11719, 11731, 11743, 11777, 11779, 11783, 11789,
+    11801, 11807, 11813, 11821, 11827, 11831, 11833, 11839, 11863, 11867, 11887,
+    11897, 11903, 11909, 11923, 11927, 11933, 11939, 11941, 11953, 11959, 11969,
+    11971, 11981, 11987, 12007, 12011, 12037, 12041, 12043, 12049, 12071, 12073,
+    12097, 12101, 12107, 12109, 12113, 12119, 12143, 12149, 12157, 12161, 12163,
+    12197, 12203, 12211, 12227, 12239, 12241, 12251, 12253, 12263, 12269, 12277,
+    12281, 12289, 12301, 12323, 12329, 12343, 12347, 12373, 12377, 12379, 12391,
+    12401, 12409, 12413, 12421, 12433, 12437, 12451, 12457, 12473, 12479, 12487,
+    12491, 12497, 12503, 12511, 12517, 12527, 12539, 12541, 12547, 12553, 12569,
+    12577, 12583, 12589, 12601, 12611, 12613, 12619, 12637, 12641, 12647, 12653,
+    12659, 12671, 12689, 12697, 12703, 12713, 12721, 12739, 12743, 12757, 12763,
+    12781, 12791, 12799, 12809, 12821, 12823, 12829, 12841, 12853, 12889, 12893,
+    12899, 12907, 12911, 12917, 12919, 12923, 12941, 12953, 12959, 12967, 12973,
+    12979, 12983, 13001, 13003, 13007, 13009, 13033, 13037, 13043, 13049, 13063,
+    13093, 13099, 13103, 13109, 13121, 13127, 13147, 13151, 13159, 13163, 13171,
+    13177, 13183, 13187, 13217, 13219, 13229, 13241, 13249, 13259, 13267, 13291,
+    13297, 13309, 13313, 13327, 13331, 13337, 13339, 13367, 13381, 13397, 13399,
+    13411, 13417, 13421, 13441, 13451, 13457, 13463, 13469, 13477, 13487, 13499,
+    13513, 13523, 13537, 13553, 13567, 13577, 13591, 13597, 13613, 13619, 13627,
+    13633, 13649, 13669, 13679, 13681, 13687, 13691, 13693, 13697, 13709, 13711,
+    13721, 13723, 13729, 13751, 13757, 13759, 13763, 13781, 13789, 13799, 13807,
+    13829, 13831, 13841, 13859, 13873, 13877, 13879, 13883, 13901, 13903, 13907,
+    13913, 13921, 13931, 13933, 13963, 13967, 13997, 13999, 14009, 14011, 14029,
+    14033, 14051, 14057, 14071, 14081, 14083, 14087, 14107, 14143, 14149, 14153,
+    14159, 14173, 14177, 14197, 14207, 14221, 14243, 14249, 14251, 14281, 14293,
+    14303, 14321, 14323, 14327, 14341, 14347, 14369, 14387, 14389, 14401, 14407,
+    14411, 14419, 14423, 14431, 14437, 14447, 14449, 14461, 14479, 14489, 14503,
+    14519, 14533, 14537, 14543, 14549, 14551, 14557, 14561, 14563, 14591, 14593,
+    14621, 14627, 14629, 14633, 14639, 14653, 14657, 14669, 14683, 14699, 14713,
+    14717, 14723, 14731, 14737, 14741, 14747, 14753, 14759, 14767, 14771, 14779,
+    14783, 14797, 14813, 14821, 14827, 14831, 14843, 14851, 14867, 14869, 14879,
+    14887, 14891, 14897, 14923, 14929, 14939, 14947, 14951, 14957, 14969, 14983,
+    15013, 15017, 15031, 15053, 15061, 15073, 15077, 15083, 15091, 15101, 15107,
+    15121, 15131, 15137, 15139, 15149, 15161, 15173, 15187, 15193, 15199, 15217,
+    15227, 15233, 15241, 15259, 15263, 15269, 15271, 15277, 15287, 15289, 15299,
+    15307, 15313, 15319, 15329, 15331, 15349, 15359, 15361, 15373, 15377, 15383,
+    15391, 15401, 15413, 15427, 15439, 15443, 15451, 15461, 15467, 15473, 15493,
+    15497, 15511, 15527, 15541, 15551, 15559, 15569, 15581, 15583, 15601, 15607,
+    15619, 15629, 15641, 15643, 15647, 15649, 15661, 15667, 15671, 15679, 15683,
+    15727, 15731, 15733, 15737, 15739, 15749, 15761, 15767, 15773, 15787, 15791,
+    15797, 15803, 15809, 15817, 15823, 15859, 15877, 15881, 15887, 15889, 15901,
+    15907, 15913, 15919, 15923, 15937, 15959, 15971, 15973, 15991, 16001, 16007,
+    16033, 16057, 16061, 16063, 16067, 16069, 16073, 16087, 16091, 16097, 16103,
+    16111, 16127, 16139, 16141, 16183, 16187, 16189, 16193, 16217, 16223, 16229,
+    16231, 16249, 16253, 16267, 16273, 16301, 16319, 16333, 16339, 16349, 16361,
+    16363, 16369, 16381, 16411, 16417, 16421, 16427, 16433, 16447, 16451, 16453,
+    16477, 16481, 16487, 16493, 16519, 16529, 16547, 16553, 16561, 16567, 16573,
+    16603, 16607, 16619, 16631, 16633, 16649, 16651, 16657, 16661, 16673, 16691,
+    16693, 16699, 16703, 16729, 16741, 16747, 16759, 16763, 16787, 16811, 16823,
+    16829, 16831, 16843, 16871, 16879, 16883, 16889, 16901, 16903, 16921, 16927,
+    16931, 16937, 16943, 16963, 16979, 16981, 16987, 16993, 17011, 17021, 17027,
+    17029, 17033, 17041, 17047, 17053, 17077, 17093, 17099, 17107, 17117, 17123,
+    17137, 17159, 17167, 17183, 17189, 17191, 17203, 17207, 17209, 17231, 17239,
+    17257, 17291, 17293, 17299, 17317, 17321, 17327, 17333, 17341, 17351, 17359,
+    17377, 17383, 17387, 17389, 17393, 17401, 17417, 17419, 17431, 17443, 17449,
+    17467, 17471, 17477, 17483, 17489, 17491, 17497, 17509, 17519, 17539, 17551,
+    17569, 17573, 17579, 17581, 17597, 17599, 17609, 17623, 17627, 17657, 17659,
+    17669, 17681, 17683, 17707, 17713, 17729, 17737, 17747, 17749, 17761, 17783,
+    17789, 17791, 17807, 17827, 17837, 17839, 17851, 17863,
+)
+
+SIEVE_LIMIT = SIEVE_PRIMES[-1] ** 2
+SIEVE_BITSIZE11 = get_uint_bitsize(SIEVE_PRIMES[-1] ** 2 - 1) - 1  # 28.
+SIEVE_BITSIZE1 = get_uint_bitsize(SIEVE_PRIMES[-1]) - 1  # 14.
+
+
+def is_small_prime(n, _sp=SIEVE_PRIMES):
+  if n >= SIEVE_LIMIT:
+    return False
+  if n < 4:
+    return n > 1
+  if not (n & 1):
+    return False
+  if not (n % 3):
+    return False
+  b = a = 1 << ((get_uint_bitsize(n) - 1) >> 1)  # First approximation.
+  a = (a + n // a) >> 1; c = a; a = (a + n // a) >> 1
+  while a != b:  # Newton iteration for floor of square root.
+    b = a; a = (a + n // a) >> 1; c = a; a = (a + n // a) >> 1
+  if a < c:
+    sqrtlimit = a + 1
+  else:
+    sqrtlimit = c + 1
+  for p in _sp:
+    if p >= sqrtlimit:
+      return True
+    if not (n % p):
+      return False
+  return True
+
+
+def get_random_prime(bitsize, is_low=False, limit=None, _sp=SIEVE_PRIMES):
+  """Generates a random prime good for RSA, of size bitsize, smaller than limit.
+
+  Args:
+    bitsize: Number of bits of the result. The first bit will be 1.
+    is_low: If true, then the minimum result is 1 << (bitsize - 1), otherwise
+        it is 3 << (bitsize - 2). The latter use useful for ensuring that the
+        product of two random prime numbers returned by this function will have
+        its top bit as 1 (3 / 4 * 3 / 4 == 9 / 16 >= 1 /2).
+    limit: If not None, then the result must be smaller than limit. The default
+        limit is 1 << bitsize.
+  Returns:
+    A prime number of size bitsize, smaller than limit.
+  """
+  if bitsize < 3:
+    raise ValueError('bitsize too small: %d' % bitsize)
+  b23 = 3 - bool(is_low)
+  # Set top 2 bits (p * q to be large enough in RSA). Also make it odd.
+  start1 = b23 << (bitsize - 3)
+  bitsizep = 1 << (bitsize - 1)
+  if limit is None:
+    limit1 = bitsizep
+    if b23 == 2:
+      limit1 -= 1 << (bitsize - 3)
+  else:
+    limit1 = limit >> 1
+    if limit1 <= start1:
+      raise ValueError('Prime limit is too small: start=%d limit=%d' % (start1 << 1 | 1, limit))
+    elif limit1 > (1 << bitsize):
+      raise ValueError('Prime limit is too large: %d' % limit)
+  del bitsizep  # Save memory.
+  limit = limit1 << 1
+  if bitsize <= SIEVE_BITSIZE11:
+    # * Possible return values for is_low=False, limit=None:
+    #   bitsize=3: 7
+    #   bitsize=4: 13
+    #   bitsize=5: 29 31
+    #   bitsize=6: 53 59 61
+    #   bitsize=7: 97 101 103 107 109 113 127
+    #   bitsize=8: 193 197 199 211 223 227 229 233 239 241 251
+    # * Possible return values for is_low=True, limit=None:
+    #   bitsize=3: 5
+    #   bitsize=4: 11
+    #   bitsize=5: 17 19 23
+    #   bitsize=6: 37 41 43 47
+    #   bitsize=7: 67 71 73 79 83 89
+    #   bitsize=8: 131 137 139 149 151 157 163 167 173 179 181 191
+    n = limit - 1
+    b = a = 1 << ((bitsize - 1) >> 1)  # First approximation.
+    a = (a + n // a) >> 1; c = a; a = (a + n // a) >> 1
+    while a != b:  # Newton iteration for floor of square root.
+      b = a; a = (a + n // a) >> 1; c = a; a = (a + n // a) >> 1
+    if a < c:
+      sqrtlimit = a + 1
+    else:
+      sqrtlimit = c + 1
+    # assert sqrtlimit <= (1 << (bitsize - 1)) <= n  # True but slow.
+    # Faster than `sp = [p for p in _sp if p < sqrtlimit]', using inlined
+    # bisect.bisect_left.
+    lo, hi = 0, len(_sp)
+    while lo < hi:
+      mid = (lo + hi) >> 1
+      if _sp[mid] < sqrtlimit:
+        lo = mid + 1
+      else:
+        hi = mid
+    sp = _sp[:lo]
+    mlimit = int(bitsize > SIEVE_BITSIZE1)
+    while 1:
+      # This will fail with ValueError if the original input range is
+      # exhausted.
+      limit1 = get_random_uint_in_range(start1, limit1)
+      n = limit1 << 1 | 1
+      m = n % 3
+      if m <= mlimit:
+        n += 2 + (m << 1)  # So that n % 6 becomes 5.
+      while n < limit:
+        for p in sp:
+          if n % p <= mlimit:  # Found a divisor of n or n - 1.
+            break
+        else:
+          # n is prime, because it doesn't have any prime divisors
+          # (up to sqrtlimit, which is large enough if bitsize <=
+          # SIEVE_BITSIZE11.
+          return n
+        if mlimit:
+          n += 6
+        elif n % 6 == 1:
+          n += 4
+        else:
+          n += 2
+  while 1:
+    # This will fail with ValueError if the original input range is
+    # exhausted.
+    r = get_random_uint_in_range(start1, limit1)
+    n = r << 1 | 1
+    m = n % 3
+    if m <= 1:
+      n += 2 + (m << 1)  # So that n % 6 becomes 5.
+    while n < limit:
+      for p in _sp:
+        if n % p <= 1:  # n or n - 1 has a small prime divisor, so n isn't good.
+          break
+      else:  # No small prime divisors of n or n - 1.
+        # This call is the slowest because of large pow(...).
+        if is_prime_miller_rabin(n, bitsize):
+          return n
+        n += 6
+        break  # Generate new random n.  Seems to make it faster.
+      # BN_generate_prime_ex(...) in OpenSSL 1.1.0l uses the `mods' array to
+      # make this `+=' faster by calling it less often. In Python it just
+      # makes it slower, and pow(a, n2, n) is much slower anyway.
+      n += 6
+    if n >= limit:
+      limit1 = r  # Decrease the limit for subsequent random numbers.
+    if r == start1:  # Very unlikely, but helps testing.
+      start1 = n >> 1
+
+
+def generate_rsa(bitsize, e=None, is_close_odd=False):
+  """Generates a random RSA private key and returns it in dict (d) format.
+
+  Args:
+    bitsize: Number of bits in result['modulus']. Must be at least 4.
+        Recommended secure value in 2020: 4096.
+    e: Force value of result['public_exponent']. If unspecified, the default
+        0x10001 will be used if bitsize >= 17, otherwise 0x101, 0x11 or 5
+        will be used, depending on bitsize.
+    is_close_odd: If true and bitsize is odd and bitsize is at least 11, then
+        both result['prime1'] and result['prime2'] will have bitsize >> 1 bits.
+        If false, then (just like by OpenSSL 1.1.0l),
+        result['prime1'] will have bitsize >> 1 | 1 bits, and
+        result['prime2'] will have bitsize >> 1 bits.
+  Returns:
+    An RSA private key dict (same as of get_rsa_private_key).
+  """
+  if bitsize < 4:
+    raise ValueError('bitsize too small: %d' % bitsize)
+  if e is None:
+    if bitsize >= 17:
+      e, ep = 0x10001, True
+    elif bitsize >= 11:
+      e, ep = 0x101, True
+  else:
+    if e >= (3 << (bitsize - 2)):  # Rule of thumb to avoid no relative primes.
+      raise ValueError('e is too large.')
+    if e < 3:
+      raise ValueError('e is too small.')
+    if not (e & 1):
+      raise ValueError('e is even.')
+    ep = is_small_prime(e)
+  if bitsize < 11:
+     # get_random_prime works with a few lower values as well. We hardcode
+     # so that we have more than one return value (for GPG main key and GPG
+     # subkey).
+    if bitsize == 10:
+      if get_random_uint_in_range(0, 2):
+        p, q, e0 = 29, 31, 17
+      else:
+        p, q, e0 = 23, 31, 17
+    elif bitsize == 9:
+      if get_random_uint_in_range(0, 2):
+        p, q, e0 = 19, 23, 17
+      else:
+        # p, q, e0 = 17, 23, 5
+        p, q, e0 = 13, 31, 17
+    elif bitsize == 8:
+      if get_random_uint_in_range(0, 2):
+        p, q, e0 = 11, 23, 17
+      else:
+        p, q, e0 = 13, 19, 17
+    elif bitsize == 7:
+      if get_random_uint_in_range(0, 2):
+        p, q, e0 = 7, 13, 17
+      else:
+        p, q, e0 = 7, 11, 17
+    elif bitsize == 6:
+      if get_random_uint_in_range(0, 2):
+        p, q, e0 = 5, 11, 17
+      else:
+        p, q, e0 = 5, 7, 17
+    elif bitsize == 5:
+      p, q, e0 = 3, 7, 5  # No other 16 <= p * q <= 31.
+    elif bitsize == 4:
+      p, q, e0 = 3, 5, 5  # No other 8 <= p * q <= 15.
+    p1, q1 = p - 1, q - 1
+    if e is None:
+      e, ep = e0, True
+    else:
+      if ep:
+        is_good = (p1 % e and q1 % e)
+      else:
+        is_good = gcd(p1, e) == 1 and gcd(q1, e) == 1
+      if not is_good:
+        raise ValueError('Generated small p and q do not match e. To fix, omit e.')
+    n = p * q
+  elif bitsize & 1 and is_close_odd:
+    pq_bitsize = (bitsize >> 1) + 1
+    while 1:
+      p = get_random_prime(pq_bitsize, True)
+      p1 = p - 1
+      if ep:
+        if not (p1 % e):  # Faster than gcd(p - 1, e).
+          continue
+      else:
+        if gcd(p1, e) != 1:
+          continue
+      break
+    q_limit = ((1 << bitsize) - 1) // p + 1
+    while 1:
+      q = get_random_prime(pq_bitsize, True, q_limit)
+      if p == q:
+        continue
+      q1 = q - 1
+      if ep:
+        if not (q1 % e):  # Faster than gcd(q - 1, e).
+          continue
+      else:
+        if gcd(q1, e) != 1:
+          continue
+      break
+    n = p * q
+    assert get_uint_bitsize(n) == bitsize, (p, q, n)
+  else:
+    p_bitsize = (bitsize + 1) >> 1  # OpenSSL 1.1.0l.
+    q_bitsize = bitsize - p_bitsize
+    while 1:
+      p = get_random_prime(p_bitsize)
+      p1 = p - 1
+      if ep:
+        if not (p1 % e):  # Faster than gcd(p - 1, e).
+          continue
+      else:
+        if gcd(p1, e) != 1:
+          continue
+      break
+    while 1:
+      q = get_random_prime(q_bitsize)
+      if p == q:
+        continue
+      q1 = q - 1
+      if ep:
+        if not (q1 % e):  # Faster than gcd(q - 1, e).
+          continue
+      else:
+        if gcd(q1, e) != 1:
+          continue
+      break
+    n = p * q
+  if p > q:
+    p, q, p1, q1 = q, p, q1, p1
+  pq1 = p1 * q1
+  dd = modinv(e, pq1)
+  return {'modulus': n, 'public_exponent': e, 'prime1': q, 'prime2': p,
+          'coefficient': modinv(p, q), 'private_exponent': dd,
+          'exponent1': dd % q1, 'exponent2': dd % p1}
+
+
+def is_bitsize_of_single_rsa_key(bitsize):
+  """Returns bool indicating whether generate_rsa returns only a single RSA key."""
+  return bitsize < 6
+
+
 # --- Hashes.
 
 
@@ -1920,6 +2561,7 @@ def convert_rsa_data(d, format='pem', effort=None, keyid=None,
 
 # --- main()
 
+
 def quick_test():
   import sys
   # Example 4096-bit key (modulus size).
@@ -1988,18 +2630,163 @@ def quick_test():
   sys.stdout.flush()
 
 
+def check_gpg_userid(comment):
+  if not comment:
+    sys.stderr.write('fatal: specify user ID as -comment ... for -outform gpg\n')
+    sys.exit(2)
+  if not is_gpg_userid(comment):
+    sys.stderr.write('info: example good GPG user ID: -comment "Test Real Name 6 (Comment 6) <testemail6@email.com>"\n')
+    sys.stderr.write('fatal: bad GPG user ID: %s\n' % repr(comment).lstrip(bb('b')))
+    sys.exit(2)
+
+
+def ensure_creation_time(d):
+  if 'creation_time' not in d:
+    import time
+    d['creation_time'] = int(time.time())
+
+
+def parse_bitsize(arg):
+  try:
+    return int(arg)
+  except ValueError:
+    pass
+  sys.stderr.write('fatal: bad <bitsize>: %s\n' % argv[i])
+  sys.exit(1)
+
+
+def update_format(old_format, format):
+  if format in ('der', 'pem') and old_format in ('der2', 'pem2', 'pcks8der', 'pcks8pem', 'pcks8'):
+    # Make `rsakeytool.py genpkey -outform pem' use format='pkcs8pem'.
+    return 'pkcs8' + format
+  else:
+    return format
+
+
+def main_generate(argv):
+  i = 1
+  is_close_odd = False
+  format = bitsize = outfn = comment = algorithm = None
+  while i < len(argv):
+    arg = argv[i]
+    i += 1
+    if arg == '-dump':
+      format = 'dict'
+      continue
+    if arg == '-closeodd':
+      is_close_odd = True
+      continue
+    if arg not in ('-out', '-outform', '-comment', '-algorithm', '-pkeyopt'):  # openssl(1) doesn't have `-outform' here.
+      if arg.startswith('-'):
+        sys.stderr.write('fatal: unknown flag (use --help): %s\n' % arg)
+        sys.exit(1)
+      i -= 1
+      break
+    if i == len(argv):
+      sys.stderr.write('fatal: missing argument for flag: %s\n' % arg)
+      sys.exit(1)
+    value = argv[i]
+    i += 1
+    if arg == '-out':
+      outfn = value
+    elif arg == '-comment':
+      comment = value
+    elif arg == '-algorithm':
+      value1 = value.lower()
+      if value1 != 'rsa':
+        sys.stderr.write('fatal: unknown algorithm: -algorithm %s\n' % value)
+        sys.exit(1)
+      algorithm = value1
+    elif arg == '-pkeyopt':
+      if ':' not in value:
+        sys.stderr.write('fatal: missing value: -pkeyopt %s\n' % value)
+        sys.exit(1)
+      key, value = value.split(':', 1)
+      key1 = key.lower()
+      if key1 != 'rsa_keygen_bits':
+        sys.stderr.write('fatal: unknown key option: -pkeyopt %s:...\n' % key)
+        sys.exit(1)
+      bitsize = parse_bitsize(value)
+    elif arg == '-outform':
+      if value == 'dict':
+        sys.stderr.write('fatal: -outform dict not supported on the command-line\n')
+        sys.exit(1)
+      format = update_format(format, value.lower())
+  if bitsize is None:
+    if i == len(argv):
+      sys.stderr.write('fatal: missing <bitsize>\n')
+      sys.exit(1)
+    bitsize = parse_bitsize(argv[i])
+    i += 1
+  if i != len(argv):
+    sys.stderr.write('fatal: too many command-line arguments\n')
+    sys.exit(1)
+  if format is None:
+    sys.stderr.write('fatal: missing -outform ...\n')
+    sys.exit(1)
+  if algorithm is None:
+    sys.stderr.write('fatal: missing -algorithm rsa.\n')
+    sys.exit(1)
+  if outfn is None and format not in ('openssh', 'pem2', 'dict', 'hexa') and not format.endswith('pem'):
+    sys.stderr.write('fatal: missing -out ... for non-ASCII -outform %s\n' % format)
+    sys.exit(1)
+  if outfn is not None and format == 'dict':
+    sys.stderr.write('fatal: unexpected -out ... for -dump\n')
+    sys.exit(1)
+  if comment is not None:
+    # TODO(pts): Allow non-ASCII comment bytes (e.g. UTF-8 or locale default)?
+    comment = bb(comment)
+  if format == 'gpg':
+    if is_bitsize_of_single_rsa_key(bitsize):
+      sys.stderr.write('fatal: genrsa conflicts with -outform gpg and small <bitsize>: %d\n' % bitsize)
+      sys.exit(1)
+    check_gpg_userid(comment)
+
+  # This is much slower than `openssl genrsa ...', mostly because of the
+  # pow(a, n2, n) call. For bitsize == 4096, this may take up to 30 seconds,
+  # while `openssl genrsa ...' takes less than 6 seconds.
+  d = generate_rsa(bitsize, is_close_odd=is_close_odd)
+  d0 = get_rsa_private_key(**d)
+  assert d0 == d, 'Bad RSA private key generated.'
+  if comment is not None:
+    d['comment'] = comment
+  if format == 'gpg':
+    check_gpg_userid(d.get('comment'))
+    ensure_creation_time(d)
+    d_sub = generate_rsa(bitsize)
+    while d_sub == d0:
+      d_sub = generate_rsa(bitsize)
+    assert get_rsa_private_key(**d_sub) == d_sub, 'Bad RSA private key generated.'
+    d_sub['creation_time'] = d['creation_time']
+    d['sub'] = d_sub
+    del d_sub
+
+  if outfn is None:
+    if format == 'dict':
+      format = 'hexa'
+    sys.stdout.write(aa(convert_rsa_data(d, format)))
+    sys.stdout.flush()
+  else:
+    data = convert_rsa_data(d, format)
+    f = open(outfn, 'wb')
+    try:
+      f.write(data)
+    finally:
+      f.close()
+
+
 def main(argv):
   import sys
   if len(argv) > 1 and argv[1] == '--quick-test':
     quick_test()
     return
-  if len(argv) < 2 or argv[1] in ('--help', '-help') or (len(argv) > 2 and argv[1] == 'rsa' and argv[2] in ('--help', '-help')):
+  if len(argv) < 2 or argv[1] in ('--help', '-help') or (len(argv) > 2 and not argv[1].startswith('-') and argv[2] in ('--help', '-help')):
     sys.stderr.write(
         'rsakeytool.py: Convert between various RSA private key formats.\n'
         'This is free software, GNU GPL >=2.0. '
         'There is NO WARRANTY. Use at your risk.\n'
         'Usage: %s rsa [<flag> ...]\n'
-        'Flags:\n'
+        'Flags for rsa:\n'
         '-dump: Print the RSA private key as hex number assignments to stdout.\n'
         '-in <input-filename>: Read RSA private key from this file.\n'
         '-out <output-filename>: Write RSA private key to this file, in output format -outform ...\n'
@@ -2008,9 +2795,24 @@ def main(argv):
         '-keyid <key-id>: Selects GPG key to read from file. Omit to get a list.\n'
         '-subin <subkey-input-filename>: Read GPG encryption subkey from this file for -outform gpg\n'
         '-comment <comment>: For the specified comment in the output file. Makes a difference for -outform hexa|openssh|gpg\n'
+        'Usage: %s {genrsa|genpkey} [<flag> ...] [<bitsize>]\n'
+        'Flags for genrsa and genpkey:\n'
+        '-out <output-filename>: Write RSA private key to this file, in output format -outform ...\n'
+        '-outform <output-format>: Any of pem == pkcs1pem (default) and others (see above).\n'
+        '-comment <comment>: For the specified comment in the output file. Makes a difference for -outform hexa|openssh|gpg\n'
+        '-pkeyopt rsa_keygen_bits:<bitsize>: Another way to specify <bitsize> for genpkey.\n'
+        '-closeodd: Make primes have the same bitsize for odd <bitsize>.\n'
         'See details on https://github.com/pts/pyrsakeytool\n'
         .replace('%s', argv[0]))
     sys.exit(1)
+  if argv[1] == 'genrsa':  # openssl genrsa -out key.pem 4096
+    argv = list(argv)
+    argv[1 : 2] = ('-outform', 'pkcs1pem', '-algorithm', 'rsa')
+    return main_generate(argv)
+  elif argv[1] == 'genpkey':  # openssl genpkey -algorithm rsa -out key.pem -pkeyopt rsa_keygen_bits:4096
+    argv = list(argv)
+    argv[1 : 2] = ('-outform', 'pkcs8pem')
+    return main_generate(argv)
   i = 1
   if argv[1] == 'rsa':  # Compatible with `openssl rsa ...'.
     #sys.stderr.write('fatal: specify rsa as first argument\n')
@@ -2077,16 +2879,8 @@ def main(argv):
     data['comment'] = bb(comment)
   if format == 'gpg':
     data = convert_rsa_data(data, 'dict', effort=0)
-    if not data.get('comment'):
-      sys.stderr.write('fatal: specify user ID as -comment ... for -outform gpg\n')
-      sys.exit(2)
-    if not is_gpg_userid(data['comment']):
-      sys.stderr.write('info: example good GPG user ID: -comment "Test Real Name 6 (Comment 6) <testemail6@email.com>"\n')
-      sys.stderr.write('fatal: bad GPG user ID: %s\n' % repr(data['comment']).lstrip(bb('b')))
-      sys.exit(2)
-    if 'creation_time' not in data:
-      import time
-      data['creation_time'] = int(time.time())
+    check_gpg_userid(data['comment'])
+    ensure_creation_time(data)
   if subinfn is None:
     if format == 'gpg':
       sys.stderr.write('warning: encryption subkey (-subin ...) is strongly recommended for -outform gpg\n')

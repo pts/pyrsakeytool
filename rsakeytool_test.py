@@ -256,6 +256,133 @@ class RsakeytoolTest(unittest.TestCase):
     self.assertEqual(bb('3d003f7f0123456789abcd'), binascii.hexlify(f(a >> 8)))
     self.assertEqual(bb('3d0040800123456789abcd'), binascii.hexlify(f(b >> 8)))
 
+  def test_get_random_prime(self):
+    f = rsakeytool.get_random_prime
+    orig_gruir = rsakeytool.get_random_uint_in_range
+    expected_gruir_calls = []
+    def gruir(start, limit):
+      if not expected_gruir_calls:
+        self.assertEqual(None, (start, limit))
+      start0, limit0, result0 = expected_gruir_calls.pop(0)
+      self.assertEqual((start0, limit0), (start, limit))  # Different gruir call than expected.
+      assert start <= result0 < limit
+      return result0
+    # Used for f(476).
+    #collected_gruir_calls = []
+    #def gruir_collect_start(start, limit):
+    #  if collected_gruir_calls and collected_gruir_calls[-1][:2] == (start, limit):
+    #    result0 = collected_gruir_calls[-1][2] + 1
+    #  else:
+    #    result0 = start
+    #  assert start <= result0 < limit
+    #  print (start, limit, result0)
+    #  collected_gruir_calls.append((start, limit, result0))
+    #  return result0
+    def check(expected_gruir_calls2, expected_prime, *args, **kwargs):
+      self.assertEqual([], expected_gruir_calls)
+      expected_gruir_calls.extend(expected_gruir_calls2)
+      self.assertEqual(expected_prime, f(*args, **kwargs))
+      self.assertEqual([], expected_gruir_calls)
+
+    rsakeytool.get_random_uint_in_range = gruir
+    try:
+      check([(3, 4, 3)], 7, 3)
+      check([(6, 8, 6)], 13, 4)
+      check([(12, 16, 12)], 29, 5)
+      check([(12, 16, 14)], 29, 5)
+      check([(12, 16, 15)], 31, 5)
+      check([(24, 32, 24)], 53, 6)
+      check([(24, 32, 29)], 59, 6)
+      check([(24, 32, 30)], 61, 6)
+      check([(24, 32, 31), (24, 31, 29)], 59, 6)
+      check([(12288, 16384, 12288)], 24659, 15)  # mlimit == 1.
+      check([(12288, 16384, 12329)], 24659, 15)
+      check([(12288, 16384, 12330)], 24917, 15)
+      check([(100663296, 134217728, 100663296)], 201327359, 28)  # Still no Miller-Rabin.
+      check([(100663296, 134217728, 134217727), (100663296, 134217727, 123456789)], 246913673, 28)
+
+      check([(201326592, 268435456, 201326592)], 402653477, 29)  # Miller-Rabin below ACCURATE_MILLER_RABIN_LIMIT.
+
+      b, c = 3 << 473, 1 << 475
+      check([
+          (b, c, b),  # Prime candidate.
+          (0, (b | 139) << 1, 0),  # Miller-Rabin base.
+          (b | 143, c, b | 143),  # Prime candidate.
+          (0, (b | 142) << 1, 0),  # Miller-Rabin base.
+          (b | 146, c, b | 146),  # Prime candidate.
+          (0, (b | 271) << 1, 0),  # Miller-Rabin base.
+          (b | 275, c, b | 275),
+          (0, (b | 727) << 1, 0),
+          (b | 731, c, b | 731),
+          (0, (b | 769) << 1, 0),
+          (b | 773, c, b | 773),
+          (0, (b | 934) << 1, 0),
+          (b | 938, c, b | 938),
+          (0, (b | 997) << 1, 0),
+          (b | 1001, c, b | 1001),
+          (0, (b | 1291) << 1, 0),
+          (b | 1295, c, b | 1295),
+          (0, (b | 1297) << 1, 0),
+          (b | 1301, c, b | 1301),
+          (0, (b | 1342) << 1, 0),
+          (b | 1346, c, b | 1346),
+          (0, (b | 1357) << 1, 0),
+          (b | 1361, c, b | 1361),
+          (0, (b | 1486) << 1, 0),
+          (b | 1490, c, b | 1490),
+          (0, (b | 1609) << 1, 0),
+          (b | 1613, c, b | 1613),
+          (0, (b | 1657) << 1, 0),
+          (b | 1661, c, b | 1661),
+          (0, (b | 1666) << 1, 0),
+          (b | 1670, c, b | 1670),
+          (0, (b | 1987) << 1, 0),
+          (b | 1991, c, b | 1991),
+          (0, (b | 2047) << 1, 0),
+          (b | 2051, c, b | 2051),  # Prime candidate.
+          (0, (b | 2281) << 1, 0),  # Miller-Rabin base.
+          (0, (b | 2281) << 1, 1),  # Miller-Rabin base.
+          (0, (b | 2281) << 1, 2),  # Miller-Rabin base.
+          (0, (b | 2281) << 1, 3),  # Miller-Rabin base.
+          (0, (b | 2281) << 1, 4),  # Miller-Rabin base (last, 5 in total).
+      ], (b | 2282) << 1 | 1, 476)
+
+      check([(2, 3, 2)], 5, 3, is_low=True)
+      check([(4, 6, 4)], 11, 4, is_low=True)
+      check([(8, 12, 8)], 17, 5, is_low=True)
+      check([(8, 12, 9)], 19, 5, is_low=True)
+      check([(8, 12, 10)], 23, 5, is_low=True)
+    finally:
+      rsakeytool.get_random_uint_in_range = orig_gruir
+
+  def test_generate_rsa(self):
+    f = rsakeytool.generate_rsa
+    orig_gruir = rsakeytool.get_random_uint_in_range
+    expected_gruir_calls = []
+    def gruir(start, limit):
+      if not expected_gruir_calls:
+        self.assertEqual(None, (start, limit))
+      start0, limit0, result0 = expected_gruir_calls.pop(0)
+      self.assertEqual((start0, limit0), (start, limit))  # Different gruir call than expected.
+      assert start <= result0 < limit
+      return result0
+    def check(expected_gruir_calls2, expected_prime, *args, **kwargs):
+      self.assertEqual([], expected_gruir_calls)
+      expected_gruir_calls.extend(expected_gruir_calls2)
+      self.assertEqual(expected_prime, f(*args, **kwargs))
+      self.assertEqual([], expected_gruir_calls)
+
+    rsakeytool.get_random_uint_in_range = gruir
+    try:
+      check([(0, 2, 0)], {'public_exponent': 17, 'coefficient': 3, 'private_exponent': 17, 'prime1': 7, 'exponent2': 1, 'prime2': 5, 'modulus': 35, 'exponent1': 5}, 6)
+      check([(0, 2, 1)], {'public_exponent': 17, 'coefficient': 9, 'private_exponent': 33, 'prime1': 11, 'exponent2': 1, 'prime2': 5, 'modulus': 55, 'exponent1': 3}, 6)
+      check([(48, 64, 48), (24, 32, 24)], {'public_exponent': 257, 'coefficient': 11, 'private_exponent': 641, 'prime1': 97, 'exponent2': 17, 'prime2': 53, 'modulus': 5141, 'exponent1': 65}, 13)
+      check([(48, 64, 48), (24, 32, 24)], {'public_exponent': 7, 'coefficient': 11, 'private_exponent': 4279, 'prime1': 97, 'exponent2': 15, 'prime2': 53, 'modulus': 5141, 'exponent1': 55}, 13, 7)
+      check([(32, 48, 32), (32, 61, 34)], {'public_exponent': 257, 'coefficient': 53, 'private_exponent': 773, 'prime1': 71, 'exponent2': 47, 'prime2': 67, 'modulus': 4757, 'exponent1': 3}, 13, is_close_odd=True)
+      check([(192, 256, 192), (96, 128, 96)], {'public_exponent': 65537, 'coefficient': 129, 'private_exponent': 49409, 'prime1': 389, 'exponent2': 65, 'prime2': 193, 'modulus': 75077, 'exponent1': 133}, 17)
+    finally:
+      rsakeytool.get_random_uint_in_range = orig_gruir
+
   def test_convert(self):
     d = get_test_rsa_key()
     assert rsakeytool.is_rsa_private_key_complete(d)
