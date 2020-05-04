@@ -56,8 +56,7 @@ try:
 except NameError:
   integer_types = (int,)
 
-try:
-  (0).to_bytes  # Python 3.2--. Faster than below.
+if getattr(0, 'to_bytes', None):  # Python 3.2--. Faster than below.
   def uint_to_any_be(value, is_low=False):
     if value < 0:
       raise ValueError('Bad negative uint.')
@@ -67,7 +66,7 @@ try:
     else:
       size = (bitsize + 7) >> 3
     return value.to_bytes(size, 'big')
-except AttributeError:
+else:
   def uint_to_any_be(value, is_low=False,
                       _bbz=bbz, _bb0=bb('0'), _bb8=bb('8'), _bb00=bb('00'), _is_hex_bytes=isinstance(hex(0), bytes)):
     if value < 0:
@@ -89,7 +88,7 @@ except AttributeError:
       return binascii.unhexlify(value)
 
 
-if getattr(int, 'from_bytes', None):
+if getattr(0, 'from_bytes', None):
   def uint_from_be(v, _from_bytes=int.from_bytes):  # Python >=3.2. Not in six.
     return _from_bytes(v, 'big')
 else:
