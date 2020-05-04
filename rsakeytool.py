@@ -37,10 +37,15 @@ except NameError:
 
 if bytes is str:  # Python 2.x.
   bb = aa = str
+  def aa_strict(data):
+    # Fails for bytes with code >127.
+    return data.decode('ascii').encode('ascii')
 else:  # Python 3.x.
   def bb(data):
     return bytes(data, 'ascii')
   def aa(data):
+    return str(data, 'ascii')
+  def aa_strict(data):
     return str(data, 'ascii')
 
 
@@ -2676,6 +2681,10 @@ def update_format(old_format, format):
     return format
 
 
+def is_ascii_format(format):
+  return format in ('openssh', 'gpgascii', 'gpgpublicascii', 'gpg23', 'gpglist', 'pem2', 'dict', 'hexa') or format.endswith('pem')
+
+
 def main_generate(argv):
   i = 1
   is_close_odd = False
@@ -2740,7 +2749,7 @@ def main_generate(argv):
   if algorithm is None:
     sys.stderr.write('fatal: missing -algorithm rsa.\n')
     sys.exit(1)
-  if outfn is None and format not in ('openssh', 'pem2', 'dict', 'hexa') and not format.endswith('pem'):
+  if outfn is None and not is_ascii_format(format):
     sys.stderr.write('fatal: missing -out ... for non-ASCII -outform %s\n' % format)
     sys.exit(1)
   if outfn is not None and format == 'dict':
@@ -2775,9 +2784,9 @@ def main_generate(argv):
     del d_sub
 
   if outfn is None:
-    if format == 'dict':
+    if format == 'dict':  # -dump.
       format = 'hexa'
-    sys.stdout.write(aa(convert_rsa_data(d, format)))
+    sys.stdout.write(aa_strict(convert_rsa_data(d, format)))
     sys.stdout.flush()
   else:
     data = convert_rsa_data(d, format)
@@ -2863,7 +2872,7 @@ def main(argv):
       if value == 'dict':
         sys.stderr.write('fatal: -outform dict not supported on the command-line\n')
         sys.exit(1)
-      format = value.lower()
+      format = update_format(format, value.lower())
     # FYI `-inform ...' is silently ignored, because rsakeytool.py
     # autodetects the input file format.
   if infn is None:
@@ -2872,8 +2881,8 @@ def main(argv):
   if format is None:
     sys.stderr.write('fatal: missing -outform ...\n')
     sys.exit(1)
-  if outfn is None and format != 'dict':
-    sys.stderr.write('fatal: missing -out ...\n')
+  if outfn is None and not is_ascii_format(format):
+    sys.stderr.write('fatal: missing -out ... for non-ASCII -outform %s\n' % format)
     sys.exit(1)
   if outfn is not None and format == 'dict':
     sys.stderr.write('fatal: unexpected -out ... for -dump\n')
@@ -2909,8 +2918,10 @@ def main(argv):
     data['sub'].setdefault('creation_time', data['creation_time'])
     del subdata  # Save memory.
 
-  if format == 'dict':  # -dump.
-    sys.stdout.write(aa(convert_rsa_data(data, 'hexa', keyid=keyid)))
+  if outfn is None:
+    if format == 'dict':  # -dump.
+      format = 'hexa'
+    sys.stdout.write(aa_strict(convert_rsa_data(data, format, keyid=keyid)))
     sys.stdout.flush()
   else:
     data = convert_rsa_data(data, format)
