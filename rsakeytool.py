@@ -131,6 +131,14 @@ else:
     return result + _octdigit_bitcount.get(value[2 : 3], 0)
 
 
+# -- Python 2.x and 3.x compatibility for iterators.
+
+if isinstance(zip(), list):
+  from itertools import izip
+else:
+  izip = zip
+
+
 # --- ASN.1 DER and PEM.
 
 
@@ -720,7 +728,7 @@ if not new_sha256:
       0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2)
 
 
-  def slow_sha256_process(block, hh, _izip=__import__('itertools').izip, _rotr32=_sha256_rotr32, _k=_sha256_k):
+  def slow_sha256_process(block, hh, _izip=izip, _rotr32=_sha256_rotr32, _k=_sha256_k):
     w = [0] * 64
     w[:16] = struct.unpack('>16L', block)
     for i in xrange(16, 64):
