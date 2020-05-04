@@ -786,13 +786,13 @@ if not new_sha256:
         buf += bytes(m)
         self._buffer = buf
       else:
-        hh, i, _buffer = self._h, 0, buffer
+        hh, i = self._h, 0
         if lb:
           assert lb < 64
           i = 64 - lb
           hh = process(buf + bytes(m[:i]), hh)
         for i in xrange(i, lm - 63, 64):
-          hh = process(_buffer(m, i, 64), hh)
+          hh = process(m[i : i + 64], hh)
         self._h = hh
         self._buffer = bytes(m[lm - ((lm - i) & 63):])
 
