@@ -18,6 +18,8 @@ See usage on https://github.com/pts/pyrsakeytool
 TODO(pts): Add public key output: PEM, OpenSSH, GPG.
 TODO(pts): Add input support for format='gpg'.
 TODO(pts): Add command-line parsing compatible with ssh-keygen.
+TODO(pts): Add output format='gpgascii', 'gpgpublicascii'.
+TODO(pts): Read 2 private keys from GPG (.lst), write 2 public keys.
 """
 
 import binascii
@@ -1461,7 +1463,7 @@ def emsa_pkcs1_v1_5(t, n):
   # https://tools.ietf.org/html/rfc3447#section-9.2
   n_size, t_size = get_uint_byte_size(n), get_uint_byte_size(t)
   if n_size < t_size + 11:
-    raise Value('n is too short.')
+    raise ValueError('n is too short: %d < %d' % (n_size, t_size + 11))
   # Same but slower: return -1 & ((1 << ((n_size << 3) - 15)) - (1 << ((t_size + 1) << 3))) | t
   return (1 << ((n_size << 3) - 15)) - ((1 << ((t_size + 1) << 3)) - t)
 
@@ -1743,7 +1745,7 @@ def get_gpg_public_key_packet_size(data, i=0):
   return i
 
 
-def build_gpg_export_secret_key_data(d, d_sub, hash_name='sha256', _bbe=bbe):
+def build_gpg_export_key_data(d, d_sub, is_public, hash_name='sha256', _bbe=bbe):
   """Returns bytes in `gpg --export-secret-key ...' format, can be imported with `gpg --import <...'"""
   # TODO(pts): Add expiry. Now these keys never expire.
   private_key_packet_data = build_gpg_rsa_private_key_packet_data(d)
@@ -1757,23 +1759,32 @@ def build_gpg_export_secret_key_data(d, d_sub, hash_name='sha256', _bbe=bbe):
   elif d_sub is None:  # Build it without a subkey.  It is unusual to have no subkey, but we can do it.
     userid_cert_signature_packet_data = build_gpg_userid_cert_rsa_signature_packet_data(
         d, hash_name, public_key_packet_data, key_id20, key_flags=GPG_KEY_FLAG_CERTIFY | GPG_KEY_FLAG_SIGN | GPG_KEY_FLAG_ENCRYPT)
-    return _bbe.join((
-        build_gpg_packet_header(5, len(private_key_packet_data)), private_key_packet_data,
-        build_gpg_packet_header(13, len(d['comment'])), d['comment'],
-        build_gpg_packet_header(2, len(userid_cert_signature_packet_data)), userid_cert_signature_packet_data,
-    ))
+    output = []
+    if is_public:
+      output.extend((build_gpg_packet_header(6, len(public_key_packet_data)), public_key_packet_data))
+    else:
+      output.extend((build_gpg_packet_header(5, len(private_key_packet_data)), private_key_packet_data))
+    output.extend((build_gpg_packet_header(13, len(d['comment'])), d['comment'],
+                   build_gpg_packet_header(2, len(userid_cert_signature_packet_data)), userid_cert_signature_packet_data))
+    return _bbe.join(output)
   else:
     raise TypeError('Bad subkey type: %r' % type(d_sub))
   userid_cert_signature_packet_data = build_gpg_userid_cert_rsa_signature_packet_data(d, hash_name, public_key_packet_data, key_id20)
   public_subkey_packet_data = private_subkey_packet_data[:get_gpg_public_key_packet_size(private_subkey_packet_data)]
   subkey_signature_packet_data = build_gpg_subkey_rsa_signature_packet_data(d, public_subkey_packet_data, hash_name, public_key_packet_data, key_id20)
-  return _bbe.join((
-      build_gpg_packet_header(5, len(private_key_packet_data)), private_key_packet_data,
-      build_gpg_packet_header(13, len(d['comment'])), d['comment'],
-      build_gpg_packet_header(2, len(userid_cert_signature_packet_data)), userid_cert_signature_packet_data,
-      build_gpg_packet_header(7, len(private_subkey_packet_data)), private_subkey_packet_data,
-      build_gpg_packet_header(2, len(subkey_signature_packet_data)), subkey_signature_packet_data,
-  ))
+  output = []
+  if is_public:
+    output.extend((build_gpg_packet_header(6, len(public_key_packet_data)), public_key_packet_data))
+  else:
+    output.extend((build_gpg_packet_header(5, len(private_key_packet_data)), private_key_packet_data))
+  output.extend((build_gpg_packet_header(13, len(d['comment'])), d['comment'],
+                 build_gpg_packet_header(2, len(userid_cert_signature_packet_data)), userid_cert_signature_packet_data))
+  if is_public:
+    output.extend((build_gpg_packet_header(14, len(public_subkey_packet_data)), public_subkey_packet_data))
+  else:
+    output.extend((build_gpg_packet_header(7, len(private_subkey_packet_data)), private_subkey_packet_data))
+  output.extend((build_gpg_packet_header(2, len(subkey_signature_packet_data)), subkey_signature_packet_data))
+  return _bbe.join(output)
 
 
 def is_gpg_userid(comment, _bbemailstart=bb(' <'), _bbemailend=bb('>'), _bbnl=bbnl):
@@ -2528,7 +2539,9 @@ def convert_rsa_data(d, format='pem', effort=None, keyid=None,
     if format == 'gpg23':
       return serialize_rsa_gpg23(d)
     if format == 'gpg':
-      return build_gpg_export_secret_key_data(d, d.get('sub'))
+      return build_gpg_export_key_data(d, d.get('sub'), is_public=False)
+    if format == 'gpgpublic':
+      return build_gpg_export_key_data(d, d.get('sub'), is_public=True)
     if format not in ('der', 'pem', 'der2', 'pem2', 'pcks1der', 'pcks1', 'pkcs1pem', 'pkcs8der', 'pkcs8', 'pkcs8pem'):
       raise ValueError('Unknown RSA private key format: %r' % (format,))
     d, data = None, serialize_rsa_der(d)
@@ -2736,7 +2749,7 @@ def main_generate(argv):
   if comment is not None:
     # TODO(pts): Allow non-ASCII comment bytes (e.g. UTF-8 or locale default)?
     comment = bb(comment)
-  if format == 'gpg':
+  if format in ('gpg', 'gpgpublic'):
     if is_bitsize_of_single_rsa_key(bitsize):
       sys.stderr.write('fatal: genrsa conflicts with -outform gpg and small <bitsize>: %d\n' % bitsize)
       sys.exit(1)
@@ -2750,7 +2763,7 @@ def main_generate(argv):
   assert d0 == d, 'Bad RSA private key generated.'
   if comment is not None:
     d['comment'] = comment
-  if format == 'gpg':
+  if format in ('gpg', 'gpgpublic'):
     check_gpg_userid(d.get('comment'))
     ensure_creation_time(d)
     d_sub = generate_rsa(bitsize)
@@ -2790,7 +2803,8 @@ def main(argv):
         '-dump: Print the RSA private key as hex number assignments to stdout.\n'
         '-in <input-filename>: Read RSA private key from this file.\n'
         '-out <output-filename>: Write RSA private key to this file, in output format -outform ...\n'
-        '-outform <output-format>: Any of pem == pkcs1pem (default), pkcs8pem, pcks1der, pkcs8der, msblob, dropbear, openssh (also opensshsingle, opensshld, opensshbin), hexa, gpg (output only), gpg22, gpg23.\n'
+        '-outform <output-format>: Any of pem == pkcs1pem (default), pkcs8pem, pcks1der, pkcs8der, '
+        'msblob, dropbear, openssh (also opensshsingle, opensshld, opensshbin), hexa, gpg (output only), gpgpublic (output only), gpg22, gpg23.\n'
         '-inform <input-format>: Ignored. Autodetected instead.\n'
         '-keyid <key-id>: Selects GPG key to read from file. Omit to get a list.\n'
         '-subin <subkey-input-filename>: Read GPG encryption subkey from this file for -outform gpg\n'
@@ -2864,8 +2878,8 @@ def main(argv):
   if outfn is not None and format == 'dict':
     sys.stderr.write('fatal: unexpected -out ... for -dump\n')
     sys.exit(1)
-  if subinfn is not None and format != 'gpg':
-    sys.stderr.write('fatal: -subin needs -outform gpg\n')
+  if subinfn is not None and format not in ('gpg', 'gpgpublic'):
+    sys.stderr.write('fatal: -subin needs -outform gpg or -outform gpgpublic\n')
     sys.exit(1)
 
   f = open(infn, 'rb')
@@ -2877,12 +2891,12 @@ def main(argv):
     data = convert_rsa_data(data, 'dict', effort=0)
     # TODO(pts): Allow non-ASCII comment bytes (e.g. UTF-8 or locale default)?
     data['comment'] = bb(comment)
-  if format == 'gpg':
+  if format in ('gpg', 'gpgpublic'):
     data = convert_rsa_data(data, 'dict', effort=0)
     check_gpg_userid(data['comment'])
     ensure_creation_time(data)
   if subinfn is None:
-    if format == 'gpg':
+    if format in ('gpg', 'gpgpublic'):
       sys.stderr.write('warning: encryption subkey (-subin ...) is strongly recommended for -outform gpg\n')
   else:
     f = open(subinfn, 'rb')

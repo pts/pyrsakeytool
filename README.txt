@@ -2,10 +2,9 @@ rsakeytool.py: RSA private key generator and converter
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 rsakeytool.py is a command-line tool written in Python to generate RSA
 priate keys, and convert between various RSA private key formats (e.g. PEM,
-DER, Microsoft, OpenSSH, Dropbear, GPG 2.2 .key, GPG 2.3 .key). It can also
-read RSA private keys exported from GPG. The command-line interface is
-compatible with of `openssl genrsa', `openssl genpkey' and
-`openssl rsa ...'.
+DER, Microsoft, OpenSSH, Dropbear, GPG 2.2 .key, GPG 2.3 .key, GPG exported
+key). The command-line interface is compatible with of `openssl genrsa',
+`openssl genpkey' and `openssl rsa ...'.
 
 Extra features over openssl(1):
 
