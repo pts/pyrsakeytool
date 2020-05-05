@@ -20,6 +20,7 @@ TODO(pts): Add command-line parsing compatible with ssh-keygen.
 TODO(pts): Add output format='gpgascii', 'gpgpublicascii'.
 TODO(pts): Read 2 private keys from GPG (.lst), write 2 public keys.
 TODO(pts): Add input format='dict', reverse of portable_repr.
+TODO(pts): Add format='sshrsa1' and format='sshrsa1public' (ssh-keygen -t rsa1).
 """
 
 import binascii
@@ -2750,11 +2751,16 @@ def ensure_creation_time(d):
 
 def parse_bitsize(arg):
   try:
-    return int(arg)
+    bitsize = int(arg)
   except ValueError:
-    pass
-  sys.stderr.write('fatal: bad <bitsize>: %s\n' % argv[i])
-  sys.exit(1)
+    bitsize = None
+  if bitsize is None:
+    sys.stderr.write('fatal: bad <bitsize>: %s\n' % argv[i])
+    sys.exit(1)
+  if bitsize < 1:
+    sys.stderr.write('fatal: bad <bitsize> value: %s\n' % argv[i])
+    sys.exit(1)
+  return bitsize
 
 
 def update_format(old_format, format):
@@ -2766,7 +2772,7 @@ def update_format(old_format, format):
 
 
 def is_ascii_format(format):
-  return format in ('openssh', 'sshpublic', 'gpgascii', 'gpgpublicascii', 'gpg23', 'gpglist', 'pem2', 'dict', 'hexa', 'pkcs1pempublic', 'pkcs8pempublic') or format.endswith('pem')
+  return format in ('openssh', 'opensshforce', 'sshpublic', 'gpgascii', 'gpgpublicascii', 'gpg23', 'gpglist', 'pem2', 'dict', 'hexa', 'pkcs1pempublic', 'pkcs8pempublic') or format.endswith('pem')
 
 
 def get_public_format(format):
@@ -2905,6 +2911,82 @@ def main_generate(argv):
   write_to_file(outfn, data)
 
 
+def convert_from_ssh_keygen_argv(argv, i):
+  # !! TODO(pts): Also generate public key: .pub.
+  # !! TODO(pts): chmod to unwritable.
+  # !! TODO(pts): generate user@host as default comment.
+  is_public = False
+  format = None
+  bitsize = filename = comment = None
+  while i < len(argv):
+    arg = argv[i]
+    i += 1
+    if arg == '--':
+      break
+    if arg == '-' or not arg.startswith('-'):
+      i -= 1
+      break
+    if arg == '-t' and i < len(argv):
+      arg2 = argv[i].lower()
+      if arg != 'rsa':  # Also 'rsa' is the ssh-keygen default.
+        sys.stderr.write('fatal: unknown algorithm: -t %s\n' % argv[i])
+        sys.exit(1)
+      i += 1
+    elif arg == '-b' and i < len(argv):
+      bitsize = parse_bitsize(argv[i])
+      i += 1
+    elif arg == '-f' and i < len(argv):
+      filename = argv[i]
+      i += 1
+    elif arg == '-C' and i < len(argv):
+      comment = argv[i]
+      i += 1
+    elif arg == '-Z' and i < len(argv):  # OpenSSH ssh-keygen doesn't have it.
+      format = argv[i]
+      # For dropbearkey compatibility. Use non-standard `-Z opensshforce' to get 'openssh'.
+      if format == 'openssh':
+        format = 'pkcs1pem'
+      i += 1
+    elif arg == '-P' and i < len(argv):
+      if argv[i]:
+        sys.stderr.write('fatal: private key passphrase unsupported: -P ...\n')
+        sys.exit(1)
+      i += 1
+    elif arg == '-y':
+      is_public = True
+    # TODO(pts): Support OpenSSH ssh-keygen flags: -i, -e, -m.
+    else:
+      sys.stderr.write('fatal: unknown ssh-keygen flag: %s\n' % arg)
+      sys.exit(1)
+  if i != len(argv):
+    sys.stderr.write('fatal: too many command-line arguments\n')
+    sys.exit(1)
+  if filename is None:
+    sys.stderr.write('fatal: missing flag: -f <filename>\n')
+    sys.exit(1)
+
+  argv2 = [argv[0]]
+  if is_public:
+    if bitsize is not None:
+      sys.stderr.write('fatal: -y conflicts with -b <bitsize>\n')
+      sys.exit(1)
+    if format is None:
+      format = 'openssh'
+    # `comment' may be None, that's fine here.
+    argv2.extend(('rsa', '-outform', format, '-pubout', '-in', filename, '-comment', comment))
+  elif bitsize is not None:
+    if format is None:
+      format = 'openssh'
+    argv2.extend(('genrsa', '-outform', format, '-out', filename, '-comment', comment, str(bitsize)))
+  elif format is not None:
+    # Convert to format, write to stdout.
+    argv2.extend(('rsa', '-outform', format, '-in', filename, '-comment', comment))
+  else:
+    sys.stderr.write('fatal: specify either -y or -b <bitsize>\n')
+    sys.exit(1)
+  return argv2
+
+
 def main(argv):
   import sys
   if len(argv) > 1 and argv[1] == '--quick-test':
@@ -2922,23 +3004,37 @@ def main(argv):
         '-out <output-filename>: Write RSA private key to this file, in output format -outform ...\n'
         '-pubout: Write public key only in format corresponding to -outform ...\n'
         '-outform <output-format>: Any of pem == pkcs1pem (default), pkcs8pem, pcks1der, pkcs8der, '
-        'msblob, dropbear, openssh (also opensshsingle, opensshld, opensshbin), sshpublic (output only), '
+        'msblob, dropbear, openssh (== opensshforce, also opensshsingle, opensshld, opensshbin), sshpublic (output only), '
         'pkcs1derpublic (output only), pkcs1pempublic (output only), pkcs8derpublic (output only), pkcs8pempublic (output only), '
         'hexa, dict (output only), gpg (output only), gpgpublic (output only), gpg22, gpg23.\n'
         '-inform <input-format>: Ignored. Autodetected instead.\n'
         '-keyid <key-id>: Selects GPG key to read from file. Omit to get a list.\n'
         '-subin <subkey-input-filename>: Read GPG encryption subkey from this file for -outform gpg\n'
-        '-comment <comment>: For the specified comment in the output file. Makes a difference for -outform hexa|openssh|gpg\n'
+        '-comment <comment>: Use the specified comment in the output file. Makes a difference for -outform hexa|dict|openssh|sshpublic|gpgpublic|gpg\n'
         'Usage: %s {genrsa|genpkey} [<flag> ...] [<bitsize>]\n'
         'Flags for genrsa and genpkey:\n'
+        '-algorithm rsa: Public key algorithm, must be specificed.\n'
         '-out <output-filename>: Write RSA private key to this file, in output format -outform ...\n'
         '-outform <output-format>: Any of pem == pkcs1pem (default) and others (see above).\n'
-        '-comment <comment>: For the specified comment in the output file. Makes a difference for -outform hexa|openssh|gpg\n'
+        '-comment <comment>: Use the specified comment in the output file. Makes a difference for -outform hexa|dict|openssh|sshpublic|gpgpublic|gpg\n'
         '-pkeyopt rsa_keygen_bits:<bitsize>: Another way to specify <bitsize> for genpkey.\n'
         '-closeodd: Make primes have the same bitsize for odd <bitsize>.\n'
+        'Usage %s [ssh-keygen] [<flag> ...]\n'
+        'Flags for ssh-keygen:\n'
+        '-t rsa: Public key algorithm.\n'
+        '-b <bitsize>: Number of bits in the moduls of the to-be-generated RSA key.\n'
+        '-f <filename>: Output filename for key generation, input filename for coversion.\n'
+        '-C <comment>: Use the specified comment in the output file.\n'
+        '-Z <output-format>: Convert to the specified format. openssh means pkcs1pem here.\n'
+        '-P <passphrase>: Use the specified passphrase. Only the empty string ("") is allowed, causing no encryption.\n'
+        '-y: Instead of key generation, convert -f <filename> to the corresponding public key on stdout.\n'
         'See details on https://github.com/pts/pyrsakeytool\n'
         .replace('%s', argv[0]))
     sys.exit(1)
+  if argv[1].startswith('-') and len(argv[1]) <= 2:
+    argv = convert_from_ssh_keygen_argv(argv, 1)
+  elif argv[1] == 'ssh-keygen':
+    argv = convert_from_ssh_keygen_argv(argv, 2)
   if argv[1] == 'genrsa':  # openssl genrsa -out key.pem 4096
     argv = list(argv)
     argv[1 : 2] = ('-outform', 'pkcs1pem', '-algorithm', 'rsa')
