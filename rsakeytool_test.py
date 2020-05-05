@@ -379,10 +379,11 @@ class RsakeytoolTest(unittest.TestCase):
       self.assertEqual((start0, limit0), (start, limit))  # Different gruir call than expected.
       assert start <= result0 < limit
       return result0
-    def check(expected_gruir_calls2, expected_prime, *args, **kwargs):
+    def check(expected_gruir_calls2, expected_d, *args, **kwargs):
       self.assertEqual([], expected_gruir_calls)
       expected_gruir_calls.extend(expected_gruir_calls2)
-      self.assertEqual(expected_prime, f(*args, **kwargs))
+      self.assertEqual(expected_d, f(*args, **kwargs))
+      self.assertTrue(rsakeytool.is_rsa_private_key_complete(expected_d))
       self.assertEqual([], expected_gruir_calls)
 
     rsakeytool.get_random_uint_in_range = gruir
@@ -432,6 +433,7 @@ class RsakeytoolTest(unittest.TestCase):
 
   def test_golden(self):
     d = get_test_rsa_key()
+    assert rsakeytool.is_rsa_private_key_complete(d)
     convert_rsa_data = rsakeytool.convert_rsa_data
     assert convert_rsa_data(d, 'dropbear') == DROPBEAR_DATA
     assert convert_rsa_data(DROPBEAR_DATA, 'dict') == d

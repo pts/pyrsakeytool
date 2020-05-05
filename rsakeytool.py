@@ -661,6 +661,7 @@ def recover_rsa_prime1_from_exponents(modulus, private_exponent, public_exponent
 
 
 def get_rsa_private_key(**kwargs):
+  """Returns a complete RSA private key dict, for which is_rsa_private_key_complete(result) is True."""
   kwargs2 = {}
   for key in ('modulus', 'n', 'public_exponent', 'e', 'private_exponent', 'd', 'prime2', 'p', 'prime1', 'q', 'coefficient', 'u'):
     value = kwargs.get(key)
@@ -668,8 +669,10 @@ def get_rsa_private_key(**kwargs):
       kwargs2[key] = int(value, 16)
     elif isinstance(value, integer_types):
       kwargs2[key] = int(value)
+      if value < 0:
+        raise ValueError('RSA %s must not be negative.' % key)
     elif value is not None:
-      raise TypeError('Bad value for key: %r' % (key,))
+      raise TypeError('Bad type for RSA %s' % key)
   modulus = kwargs2.get('modulus') or kwargs2.get('n') or 0
   public_exponent = kwargs2.get('public_exponent') or kwargs2.get('e') or 0  # Typically: 0x10001
   private_exponent = kwargs2.get('private_exponent') or kwargs2.get('d') or 0
@@ -725,10 +728,16 @@ def get_rsa_private_key(**kwargs):
       raise ValueError('Primes must not be equal.')
     prime1, prime2 = prime2, prime1
   # True but slow: assert prime1 > prime2
-  if prime1 < 3 or prime2 < 2:
+  if prime1 < 5 or prime2 < 3:
     raise ValueError('Primes are too small.')
+  if not (prime1 & 1):
+    raise TypeError('prime1 must be odd.')
+  if not (prime2 & 1):
+    raise TypeError('prime2 must be odd.')
   if modulus != prime1 * prime2:
     raise ValueError('Mismatch in modulus vs primes.')
+  if coefficient >= prime1:
+    raise ValueError('Bad coefficient.')
   if not (coefficient and prime2 * coefficient % prime1 == 1):
     try:
       coefficient = modinv(prime2, prime1)
@@ -740,10 +749,10 @@ def get_rsa_private_key(**kwargs):
   lcm = pp1 // gcd(prime1 - 1, prime2 - 1)
   if ec < 1:
     raise ValueError('Needed at least 1 of private_exponent, public_exponent.')
-  if not 0 <= private_exponent < pp1:
-    raise ValueError('Bad private_exponent.')
-  if not 0 <= public_exponent < pp1:
+  if public_exponent and not 1 < public_exponent < pp1:
     raise ValueError('Bad public_exponent.')
+  if private_exponent and not 1 < private_exponent < pp1:
+    raise ValueError('Bad private_exponent.')
   if not private_exponent:
     # lcm instead of pp1 would also work, but produce different value.
     private_exponent = modinv(public_exponent, pp1)
@@ -798,29 +807,33 @@ def is_rsa_private_key_complete(d, effort=None):
       d.get('exponent1') and d.get('exponent2') and d.get('coefficient')):
     return False
   if effort >= 1:
-    if not (
-        isinstance(d['prime1'], integer_types) and
-        isinstance(d['prime2'], integer_types) and
-        isinstance(d['modulus'], integer_types) and
-        2 < d['prime2'] < d['prime1'] < d['modulus']):
+    if not (isinstance(d['prime1'], integer_types) and
+            isinstance(d['prime2'], integer_types) and
+            isinstance(d['modulus'], integer_types) and
+            d['prime1'] & 1 and d['prime2'] & 1 and
+            2 < d['prime2'] < d['prime1'] < d['modulus'] and
+            2 < d['public_exponent'] + 1 < d['modulus'] and
+            2 < d['private_exponent'] + 1 < d['modulus'] and
+            0 < d['coefficient'] < d['prime1']):
       return False
     pm1, pm2 = d['prime1'] - 1, d['prime2'] - 1
+    if not (isinstance(d['exponent1'], integer_types) and
+            isinstance(d['exponent2'], integer_types) and
+            0 < d['exponent1'] < pm1 and
+            0 < d['exponent2'] < pm2):
+       return False
     pp1 = pm1 * pm2
     if not (
         isinstance(d['public_exponent'], integer_types) and
         isinstance(d['private_exponent'], integer_types) and
-        1 <= d['private_exponent'] < pp1 and
-        1 <= d['public_exponent'] < pp1):
+        d['private_exponent'] < pp1 and
+        d['public_exponent'] < pp1):
       return False
     if effort >= 2 and d['modulus'] != d['prime1'] * d['prime2']:
       return False
     if effort >= 3:
-      try:
-        coefficient = modinv(d['prime2'], d['prime1'])
-      except ValueError:
-        coefficient = None
       if not (
-          d['coefficient'] == coefficient and
+          d['coefficient'] * d['prime2'] % d['prime1'] == 1 and
           d['exponent1'] == d['private_exponent'] % pm1,
           d['exponent2'] == d['private_exponent'] % pm2):
         return False
