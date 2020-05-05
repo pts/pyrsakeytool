@@ -1471,7 +1471,7 @@ def emsa_pkcs1_v1_5(t, n):
   # https://tools.ietf.org/html/rfc3447#section-9.2
   n_size, t_size = get_uint_byte_size(n), get_uint_byte_size(t)
   if n_size < t_size + 11:
-    raise ValueError('n is too short: %d < %d' % (n_size, t_size + 11))
+    raise ValueError('n is too short (to fix, increase <bitsize>): %d < %d' % (n_size, t_size + 11))
   # Same but slower: return -1 & ((1 << ((n_size << 3) - 15)) - (1 << ((t_size + 1) << 3))) | t
   return (1 << ((n_size << 3) - 15)) - ((1 << ((t_size + 1) << 3)) - t)
 
@@ -2805,6 +2805,10 @@ def main_generate(argv):
     # TODO(pts): Allow non-ASCII comment bytes (e.g. UTF-8 or locale default)?
     comment = bb(comment)
   if format in ('gpg', 'gpgpublic'):
+    if bitsize < 489:
+      # This assumes hash_name='sha256'.
+      sys.stderr.write('fatal: genrsa conflicts with -outform gpg and <bitsize> too small for hash output: %d\n' % bitsize)
+      sys.exit(1)
     if is_bitsize_of_single_rsa_key(bitsize):
       sys.stderr.write('fatal: genrsa conflicts with -outform gpg and small <bitsize>: %d\n' % bitsize)
       sys.exit(1)
