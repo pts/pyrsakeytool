@@ -19,6 +19,7 @@ TODO(pts): Add input support for format='gpg'.
 TODO(pts): Add command-line parsing compatible with ssh-keygen.
 TODO(pts): Add output format='gpgascii', 'gpgpublicascii'.
 TODO(pts): Read 2 private keys from GPG (.lst), write 2 public keys.
+TODO(pts): Add input format='dict', reverse of portable_repr.
 """
 
 import binascii
@@ -63,7 +64,7 @@ except NameError:
   integer_types = (int,)
 
 if getattr(0, 'to_bytes', None):  # Python 3.2--. Faster than below.
-  def uint_to_any_be(value, is_low=False):
+  def uint_to_any_be(value, is_low=False, is_hex=False):
     if value < 0:
       raise ValueError('Bad negative uint.')
     bitsize = value.bit_length() or 1
@@ -71,27 +72,29 @@ if getattr(0, 'to_bytes', None):  # Python 3.2--. Faster than below.
       size = (bitsize >> 3) + 1
     else:
       size = (bitsize + 7) >> 3
-    return value.to_bytes(size, 'big')
+    value = value.to_bytes(size, 'big')
+    if is_hex:
+      return binascii.hexlify(value)
+    return value
 else:
-  def uint_to_any_be(value, is_low=False,
+  def uint_to_any_be(value, is_low=False, is_hex=False,
                       _bbz=bbz, _bb0=bb('0'), _bb8=bb('8'), _bb00=bb('00'), _is_hex_bytes=isinstance(hex(0), bytes)):
     if value < 0:
       raise ValueError('Bad negative uint.')
-    if not is_low and value <= 0xffffffffffffffff:
-      return struct.pack('>Q', value).lstrip(_bbz) or _bbz
+    if _is_hex_bytes:
+      # In Python 2.4--2.7, '%x' % value is 4.327% slower than hex(value)[2:], but
+      # ('%x' % value).rstrip('L') and variants are slower than either.
+      value = '%x' % value
     else:
-      if _is_hex_bytes:
-        # In Python 2.4--2.7, '%x' % value is 4.327% slower than hex(value)[2:], but
-        # ('%x' % value).rstrip('L') and variants are slower than either.
-        value = '%x' % value
-      else:
-        # In Python 3.5--, b'%x' % value is 3.185% faster than bytes(hex(value)[2:], 'ascii').
-        value = bytes(hex(value), 'ascii')[2:]
-      if len(value) & 1:
-        value = _bb0 + value
-      elif is_low and not _bb0 <= value[:1] < _bb8:
-        value = _bb00 + value
-      return binascii.unhexlify(value)
+      # In Python 3.5--, b'%x' % value is 3.185% faster than bytes(hex(value)[2:], 'ascii').
+      value = bytes(hex(value), 'ascii')[2:]
+    if len(value) & 1:
+      value = _bb0 + value
+    elif is_low and not _bb0 <= value[:1] < _bb8:
+      value = _bb00 + value
+    if is_hex:
+      return value
+    return binascii.unhexlify(value)
 
 
 if getattr(0, 'from_bytes', None):
@@ -419,6 +422,145 @@ def parse_gpg23_uint(data, i, j, _bbhash=bb('#')):
   return i + 1, value
 
 
+# --- repr (Python literal expression) format tools.
+
+
+BYTES_UNESCAPES = {bb('a'): bb('\a'), bb('b'): bb('\b'), bb('f'): bb('\f'), bb('n'): bb('\n'), bb('r'): bb('\r'), bb('t'): bb('\t'), bb('v'): bb('\v')}
+
+
+def parse_repr_bytes(data, _bbqs=(bb('b\''), bb('b"')), _bbnl=bbnl, _bbbs=bb('\\'), _bbe=bbe, _bbxx=bb('xX'), _bb0123=bb('0123'),
+                     _bbbsbs=bb('\\\\'), _bbr1=bb('\\x5c'), _bbr2=bb('\\\''), _bbr3=bb('\\x27'), _bbr4=bb('\\"'), _bbr5=bb('\\x22'),
+                     _bytes_unescapes=BYTES_UNESCAPES):
+  if not isinstance(data, bytes):
+    raise TypeError
+  prefix = data[:2].lower()
+  if prefix not in _bbqs:
+    raise ValueError('Not a bytes literal prefix.')
+  if len(data) < 2 or not data.endswith(data[1 : 2]):
+    raise ValueError('Not a bytes literal suffix.')
+  # ast.literal_eval can't parse byte string literals in
+  # Python 3.0, so we don't use it here.
+  data = data[2 : -1]
+  if _bbnl in data:
+    raise ValueError('Found newline in bytes literal.')
+  data = data.replace(_bbbsbs, _bbr1).replace(_bbr2, _bbr3).replace(_bbr4, _bbr5)
+  if prefix[1:] in data:
+    raise ValueError('Delimiter syntax error in bytes literal.')
+  if _bbbs in data:  # Slow processing if contains backslash.
+    i, size, output = 0, len(data), []
+    while 1:
+      i0, i = i, data.find(_bbbs, i)
+      if i < 0:
+        output.append(data[i0:])
+        break
+      if i + 1 >= size:
+        raise ValueError('Trailing backslash in bytes literal.')
+      if i > i0:
+        output.append(data[i0 : i])
+      c = data[i + 1 : i + 2]
+      if c in _bbxx:  # We support \x?? only (not shorter).
+        if i + 4 > size:
+          raise ValueError('EOF in hex escape.')
+        try:
+          c = binascii.unhexlify(data[i + 2 : i + 4])
+        except (ValueError, TypeError):
+          c = None
+        if c is None:
+          raise ValueError('Bad hex escape.')
+        i += 4
+      elif c in _bb0123:  # We support \??? only (not shorter).
+        if i + 4 > size:
+          raise ValueError('EOF in oct escape.')
+        try:
+          c = struct.pack('>B', int(data[i + 1 : i + 4], 8))
+        except ValueError:
+          c = None
+        if c is None:
+          raise ValueError('Bad oct escape.')
+        i += 4
+      else:
+        c = _bytes_unescapes.get(c)
+        if not c:
+          raise ValueError('Bad backslash escape: %r' % data[i : i + 1])
+        i += 2
+      output.append(c)
+    data = _bbe.join(output)
+  return data
+
+
+def append_portable_repr(output, value,
+                         _bbbools=(bb('False'), bb('True')), _bbnone=bb('None'), _bb0x=bb('0x'), _bbm0x=bb('-0x'), _bbop=bb('('), _bbcp=bb(')'), _bbcommasp=bb(', '),
+                         _bbos=bb('['), _bbcs=bb(']'), _bbob=bb('{'), _bbcb=bb('}'), _bbcolonsp=bb(': '), _bbbs=bb('\\'), _bbsq=bb('\''), _bbb=bb('b')):
+  if isinstance(value, bool):
+    output.append(_bbbools[value])
+  elif isinstance(value, integer_types):
+    if value < 0:
+      output.append(_bbm0x)
+      output.append(uint_to_any_be(-value, is_hex=True))
+    else:
+      output.append(_bb0x)
+      output.append(uint_to_any_be(value, is_hex=True))
+  elif isinstance(value, bytes):
+    value = repr(value)
+    if value[:1] != 'b':
+      output.append(_bbb)  # Force b prefix for Python 2.x repr.
+    output.append(bb(value))
+  elif value is None:
+    output.append(_bbnone)
+  elif isinstance(value, tuple):
+    i = len(output)
+    if not value:
+      output.append(0)
+    for item in value:
+      output.append(_bbcommasp)
+      append_portable_repr(output, item)
+    output[i] = _bbop
+    if len(value) == 1:
+      output.append(_bbcommasp[:1])
+    output.append(_bbcp)
+  elif isinstance(value, list):
+    i = len(output)
+    if not value:
+      output.append(0)
+    for item in value:
+      output.append(_bbcommasp)
+      append_portable_repr(output, item)
+    output[i] = _bbos
+    output.append(_bbcs)
+  elif isinstance(value, dict):
+    i = len(output)
+    if not value:
+      output.append(0)
+    # In Python 3, sorted fails if keys are of a different type.
+    for key in sorted(value):
+      output.append(_bbcommasp)
+      if isinstance(key, str):
+        key2 = bb(repr(bb(key)))  # This raises ValueError if not ASCII.
+        if _bbbs in key2 or not key2.endswith(_bbsq):
+          raise ValueError('Bad string key: %r' % key)
+        output.append(key2.lstrip(_bbb))
+      elif isinstance(key, bytes):  # This can fail in Python 3.x only.
+        raise ValueError('Key must not be bytes.')
+      else:
+        append_portable_repr(output, key)
+      output.append(_bbcolonsp)
+      append_portable_repr(output, value[key])
+    output[i] = _bbob
+    output.append(_bbcb)
+  else:
+    raise TypeError('Unknown type for portable repr: %r' % type(value))
+
+
+def portable_repr(value, suffix=bbe, _bbe=bbe):
+  """Serializes data as bytes in Python 2.7, Python 3.x literal syntax. It's
+  deterministic (e.g. dict iteration order). It emits ints as even-length
+  hex. It doesn't distinguishes int vs long."""
+  output = []
+  append_portable_repr(output, value)
+  output.append(suffix)
+  return _bbe.join(output)
+
+
 # --- RSA calculations.
 
 
@@ -690,7 +832,7 @@ def is_rsa_private_key_complete(d, effort=None):
   return True
 
 
-# --- Random byte generation.
+# --- Random byte and uint generation.
 
 
 def _get_random_bytes_urandom(size):
@@ -2075,68 +2217,6 @@ def has_hexa_header(data, i, _bbu=bb('_'), _bbeq=bb('=')):
   return key in HEXA_KEYS
 
 
-BYTES_UNESCAPES = {bb('a'): bb('\a'), bb('b'): bb('\b'), bb('f'): bb('\f'), bb('n'): bb('\n'), bb('r'): bb('\r'), bb('t'): bb('\t'), bb('v'): bb('\v')}
-
-
-def parse_repr_bytes(data, _bbqs=(bb('b\''), bb('b"')), _bbnl=bbnl, _bbbs=bb('\\'), _bbe=bbe, _bbxx=bb('xX'), _bb0123=bb('0123'),
-                     _bbbsbs=bb('\\\\'), _bbr1=bb('\\x5c'), _bbr2=bb('\\\''), _bbr3=bb('\\x27'), _bbr4=bb('\\"'), _bbr5=bb('\\x22')):
-  if not isinstance(data, bytes):
-    raise TypeError
-  prefix = data[:2].lower()
-  if prefix not in _bbqs:
-    raise ValueError('Not a bytes literal prefix.')
-  if len(data) < 2 or not data.endswith(data[1 : 2]):
-    raise ValueError('Not a bytes literal suffix.')
-  # ast.literal_eval can't parse byte string literals in
-  # Python 3.0, so we don't use it here.
-  data = data[2 : -1]
-  if _bbnl in data:
-    raise ValueError('Found newline in bytes literal.')
-  data = data.replace(_bbbsbs, _bbr1).replace(_bbr2, _bbr3).replace(_bbr4, _bbr5)
-  if prefix[1:] in data:
-    raise ValueError('Delimiter syntax error in bytes literal.')
-  if _bbbs in data:  # Slow processing if contains backslash.
-    i, size, output = 0, len(data), []
-    while 1:
-      i0, i = i, data.find(_bbbs, i)
-      if i < 0:
-        output.append(data[i0:])
-        break
-      if i + 1 >= size:
-        raise ValueError('Trailing backslash in bytes literal.')
-      if i > i0:
-        output.append(data[i0 : i])
-      c = data[i + 1 : i + 2]
-      if c in _bbxx:  # We support \x?? only (not shorter).
-        if i + 4 > size:
-          raise ValueError('EOF in hex escape.')
-        try:
-          c = binascii.unhexlify(data[i + 2 : i + 4])
-        except (ValueError, TypeError):
-          c = None
-        if c is None:
-          raise ValueError('Bad hex escape.')
-        i += 4
-      elif c in _bb0123:  # We support \??? only (not shorter).
-        if i + 4 > size:
-          raise ValueError('EOF in oct escape.')
-        try:
-          c = struct.pack('>B', int(data[i + 1 : i + 4], 8))
-        except ValueError:
-          c = None
-        if c is None:
-          raise ValueError('Bad oct escape.')
-        i += 4
-      else:
-        c = BYTES_UNESCAPES.get(c)
-        if not c:
-          raise ValueError('Bad backslash escape: %r' % data[i : i + 1])
-        i += 2
-      output.append(c)
-    data = _bbe.join(output)
-  return data
-
-
 def parse_rsa_hexa(data, i, _bbu=bb('_'), _bbeq=bb('=')):
   d, j = {}, len(data)
   while i < j:
@@ -2184,7 +2264,7 @@ def parse_rsa_hexa(data, i, _bbu=bb('_'), _bbeq=bb('=')):
   return d
 
 
-def serialize_rsa_hexa(d, _bbassign=bb(' = '), _bb0x=bb('0x'), _bbnl=bbnl, _bbe=bbe, _bbpx=bb('%x'), _bb0=bb('0')):
+def serialize_rsa_hexa(d, _bbassign=bb(' = '), _bbnl=bbnl, _bbe=bbe, _bbpx=bb('%x'), _bb0=bb('0')):
   """Serializes hexa: hexadecimal assignment."""
   output = []
   for key in HEXA_KEYS:
@@ -2195,27 +2275,7 @@ def serialize_rsa_hexa(d, _bbassign=bb(' = '), _bb0x=bb('0x'), _bbnl=bbnl, _bbe=
     value = d[key]
     output.append(bb(key))
     output.append(_bbassign)
-    if key == 'comment':
-      value = repr(value)
-      if value[:1] in '"\'':
-        value = 'b' + value  # Binary string in Python 2.x.
-      output.append(bb(value))
-    else:
-      try:
-        value = _bbpx % value
-      except TypeError:  # Python 3.0--3.4.
-        value = bytes(hex(value), 'ascii')
-        if len(value) & 1:
-          output.append(_bb0x)
-          output.append(_bb0)
-          value = value[2:]
-        output.append(value)
-        value = ()
-      if value:
-        output.append(_bb0x)
-        if len(value) & 1:
-          output.append(_bb0)
-        output.append(value)
+    append_portable_repr(output, value)
     output.append(_bbnl)
   return _bbe.join(output)
 
@@ -2731,6 +2791,18 @@ def get_public_format(format):
   return None
 
 
+def write_to_file(outfn, data):
+  if outfn is None:
+    sys.stdout.write(aa_strict(data))
+    sys.stdout.flush()
+  else:
+    f = open(outfn, 'wb')
+    try:
+      f.write(data)
+    finally:
+      f.close()
+
+
 def main_generate(argv):
   i = 1
   is_close_odd = False
@@ -2739,7 +2811,7 @@ def main_generate(argv):
     arg = argv[i]
     i += 1
     if arg == '-dump':
-      format = 'dict'
+      outfn, format = None, 'hexa'
       continue
     if arg == '-closeodd':
       is_close_odd = True
@@ -2776,9 +2848,6 @@ def main_generate(argv):
         sys.exit(1)
       bitsize = parse_bitsize(value)
     elif arg == '-outform':
-      if value == 'dict':
-        sys.stderr.write('fatal: -outform dict not supported on the command-line\n')
-        sys.exit(1)
       format = update_format(format, value.lower())
   if bitsize is None:
     if i == len(argv):
@@ -2797,9 +2866,6 @@ def main_generate(argv):
     sys.exit(1)
   if outfn is None and not is_ascii_format(format):
     sys.stderr.write('fatal: missing -out ... for non-ASCII -outform %s\n' % format)
-    sys.exit(1)
-  if outfn is not None and format == 'dict':
-    sys.stderr.write('fatal: unexpected -out ... for -dump\n')
     sys.exit(1)
   if comment is not None:
     # TODO(pts): Allow non-ASCII comment bytes (e.g. UTF-8 or locale default)?
@@ -2833,18 +2899,10 @@ def main_generate(argv):
     d['sub'] = d_sub
     del d_sub
 
-  if outfn is None:
-    if format == 'dict':  # -dump.
-      format = 'hexa'
-    sys.stdout.write(aa_strict(convert_rsa_data(d, format)))
-    sys.stdout.flush()
-  else:
-    data = convert_rsa_data(d, format)
-    f = open(outfn, 'wb')
-    try:
-      f.write(data)
-    finally:
-      f.close()
+  data = convert_rsa_data(d, format)
+  if format == 'dict':
+    data = portable_repr(data, suffix=bbnl)
+  write_to_file(outfn, data)
 
 
 def main(argv):
@@ -2866,7 +2924,7 @@ def main(argv):
         '-outform <output-format>: Any of pem == pkcs1pem (default), pkcs8pem, pcks1der, pkcs8der, '
         'msblob, dropbear, openssh (also opensshsingle, opensshld, opensshbin), sshpublic (output only), '
         'pkcs1derpublic (output only), pkcs1pempublic (output only), pkcs8derpublic (output only), pkcs8pempublic (output only), '
-        'hexa, gpg (output only), gpgpublic (output only), gpg22, gpg23.\n'
+        'hexa, dict (output only), gpg (output only), gpgpublic (output only), gpg22, gpg23.\n'
         '-inform <input-format>: Ignored. Autodetected instead.\n'
         '-keyid <key-id>: Selects GPG key to read from file. Omit to get a list.\n'
         '-subin <subkey-input-filename>: Read GPG encryption subkey from this file for -outform gpg\n'
@@ -2902,7 +2960,7 @@ def main(argv):
     arg = argv[i]
     i += 1
     if arg == '-dump':
-      format = 'dict'
+      outfn, format = None, 'hexa'
       continue
     elif arg == '-pubout':
       is_public = True
@@ -2926,9 +2984,6 @@ def main(argv):
     elif arg == '-comment':
       comment = value
     elif arg == '-outform':
-      if value == 'dict':
-        sys.stderr.write('fatal: -outform dict not supported on the command-line\n')
-        sys.exit(1)
       format = update_format(format, value.lower())
     # FYI `-inform ...' is silently ignored, because rsakeytool.py
     # autodetects the input file format.
@@ -2946,9 +3001,6 @@ def main(argv):
     format = format2
   if outfn is None and not is_ascii_format(format):
     sys.stderr.write('fatal: missing -out ... for non-ASCII -outform %s\n' % format)
-    sys.exit(1)
-  if outfn is not None and format == 'dict':
-    sys.stderr.write('fatal: unexpected -out ... for -dump\n')
     sys.exit(1)
   if subinfn is not None and format not in ('gpg', 'gpgpublic'):
     sys.stderr.write('fatal: -subin needs -outform gpg or -outform gpgpublic\n')
@@ -2981,18 +3033,10 @@ def main(argv):
     data['sub'].setdefault('creation_time', data['creation_time'])
     del subdata  # Save memory.
 
-  if outfn is None:
-    if format == 'dict':  # -dump.
-      format = 'hexa'
-    sys.stdout.write(aa_strict(convert_rsa_data(data, format, keyid=keyid)))
-    sys.stdout.flush()
-  else:
-    data = convert_rsa_data(data, format)
-    f = open(outfn, 'wb')
-    try:
-      f.write(data)
-    finally:
-      f.close()
+  data = convert_rsa_data(data, format, keyid=keyid)
+  if format == 'dict':
+    data = portable_repr(data, suffix=bbnl)
+  write_to_file(outfn, data)
 
 
 if __name__ == '__main__':

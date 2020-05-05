@@ -199,6 +199,18 @@ class RsakeytoolTest(unittest.TestCase):
     self.assertRaises(ValueError, f, bb("b'\\308'"))
     self.assertRaises(ValueError, f, bb("b'\\400'"))
 
+  def test_portable_repr(self):
+    f= rsakeytool.portable_repr
+    self.assertEqual(bb('()'), f(()))
+    self.assertEqual(bb('(0x0a,)'), f((10,)))
+    self.assertEqual(bb('(0x0a, 0x138b, 0x00, None, True, False)'), f((10, 5003, 0, None, True, False)))
+    self.assertEqual(bb('[]'), f([]))
+    self.assertEqual(bb('[0x0a]'), f([10]))
+    self.assertEqual(bb(r'''[b'foo\nbar\x00', b'\t\n\xb5', (), []]'''), f([bb('foo\nbar\0'), binascii.unhexlify(bb('090ab5')), (), []]))
+    self.assertEqual(bb('{}'), f({}))
+    self.assertEqual(bb(r'''[([[{'answer': 0x2a}]],)]'''), f([([[{'answer': 42}]],)]))
+    self.assertEqual(bb(r'''{'': {}, 'nn': b'\r\x0b\x08\\"\'', 'o': b"'"}'''), f({'': {}, 'nn': bb('\r\v\b\\\"\''), 'o': bb("'")}))
+
   def test_uint_to_any_be(self):
     f = rsakeytool.uint_to_any_be
     a = 0x7f0123456789abcdef
@@ -217,6 +229,7 @@ class RsakeytoolTest(unittest.TestCase):
     self.assertEqual(bb('800123456789abcd'), binascii.hexlify(f(b >> 8)))
     self.assertEqual(bb('7f0123456789abcd'), binascii.hexlify(f(a >> 8, True)))
     self.assertEqual(bb('00800123456789abcd'), binascii.hexlify(f(b >> 8, True)))
+    self.assertEqual(bb('00800123456789abcd'), f(b >> 8, True, is_hex=True))
 
   def test_get_uint_bitsize(self):
     f = rsakeytool.get_uint_bitsize
