@@ -51,6 +51,10 @@ Example usage for file format conversion:
 
   $ ./rsakeytool.py rsa -in ~/.ssh/id_rsa -out rsa.msblob -outform msblob
 
+Example for converting an RSA private key to an SSH public key:
+
+  $ ./rsakeytool.py rsa -in ~/.ssh/id_rsa -outform sshpublic -comment mycomment >copy_of_id_rsa.pub
+
 Example usage for key recovery (all fields from 3 fields):
 
   $ (echo 'e = 5'; echo 'd = 493'; echo 'n = 0x29B') >re.hexa

@@ -15,7 +15,8 @@ This script needs Python 2.4, 2.5, 2.6, 2.7 or 3.x.
 
 See usage on https://github.com/pts/pyrsakeytool
 
-TODO(pts): Add public key output: PEM, OpenSSH, GPG.
+TODO(pts): Add public key output: pkcs1derpublic, pkcs1pempublic, pkcs8derpublic, pkcs8pempublic.
+TODO(pts): Add compatibility with `openssl rsa -pubout'.
 TODO(pts): Add input support for format='gpg'.
 TODO(pts): Add command-line parsing compatible with ssh-keygen.
 TODO(pts): Add output format='gpgascii', 'gpgpublicascii'.
@@ -2023,6 +2024,11 @@ def serialize_rsa_openssh(d, _bbopensshbegin=bbopensshbegin, _bbopensshend=bbope
   return _bbe.join((_bbopensshbegin, base64_encode(serialize_rsa_opensshbin(d), 70), _bbopensshend))
 
 
+def serialize_rsa_sshpublic(d, _bbe=bbe, _bbsshrsa=bbsshrsa, _bbsshrsasp=bb('ssh-rsa '), _bbnl=bbnl, _bbsp=bb(' '), _bbrr=bb('\r')):
+  data = _bbe.join((_bbsshrsa, be32size_value(d['public_exponent']), be32size_value(d['modulus'])))
+  return _bbe.join((_bbsshrsasp, binascii.b2a_base64(data).rstrip(_bbnl), _bbsp, d.get('comment', _bbe).replace(_bbnl, _bbsp).replace(_bbrr, _bbsp), _bbnl))
+
+
 bbmsblob = struct.pack('<LL4s', 0x207, 0xa400, bb('RSA2'))
 
 
@@ -2529,6 +2535,8 @@ def convert_rsa_data(d, format='pem', effort=None, keyid=None,
       return serialize_rsa_dropbear(d)
     if format == 'openssh':
       return serialize_rsa_openssh(d)
+    if format == 'sshpublic':
+      return serialize_rsa_sshpublic(d)
     if format == 'opensshsingle':
       return serialize_rsa_opensshsingle(d)
     if format == 'opensshld':
@@ -2682,7 +2690,7 @@ def update_format(old_format, format):
 
 
 def is_ascii_format(format):
-  return format in ('openssh', 'gpgascii', 'gpgpublicascii', 'gpg23', 'gpglist', 'pem2', 'dict', 'hexa') or format.endswith('pem')
+  return format in ('openssh', 'sshpublic', 'gpgascii', 'gpgpublicascii', 'gpg23', 'gpglist', 'pem2', 'dict', 'hexa') or format.endswith('pem')
 
 
 def main_generate(argv):
@@ -2813,7 +2821,7 @@ def main(argv):
         '-in <input-filename>: Read RSA private key from this file.\n'
         '-out <output-filename>: Write RSA private key to this file, in output format -outform ...\n'
         '-outform <output-format>: Any of pem == pkcs1pem (default), pkcs8pem, pcks1der, pkcs8der, '
-        'msblob, dropbear, openssh (also opensshsingle, opensshld, opensshbin), hexa, gpg (output only), gpgpublic (output only), gpg22, gpg23.\n'
+        'msblob, dropbear, openssh (also opensshsingle, opensshld, opensshbin), sshpublic, hexa, gpg (output only), gpgpublic (output only), gpg22, gpg23.\n'
         '-inform <input-format>: Ignored. Autodetected instead.\n'
         '-keyid <key-id>: Selects GPG key to read from file. Omit to get a list.\n'
         '-subin <subkey-input-filename>: Read GPG encryption subkey from this file for -outform gpg\n'
