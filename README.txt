@@ -39,7 +39,10 @@ custom OpenSSH format (~/.ssh/id_rsa). PEM is an ASCII (with base64) format.
 DER is the eqivalent binary format. Both of these formats serialize values
 using ASN.1. Other formats (such as OpeNSSH and Microsoft) dont' use ASN.1.
 
-Example usage for generating an RSA private key:
+Below `(+O)' indicates that the command-line is compatible with
+`openssl ...'.
+
+Example usage for generating an RSA private key (+O):
 
   $ ./rsakeytool.py genrsa -out key.pem 2048
 
@@ -47,13 +50,21 @@ Example usage for dumping hex integer values to stdout:
 
   $ ./rsakeytool.py rsa -in ~/.ssh/id_rsa -dump
 
-Example usage for file format conversion:
+Example usage for file format conversion to msblob format (+O):
 
   $ ./rsakeytool.py rsa -in ~/.ssh/id_rsa -out rsa.msblob -outform msblob
 
 Example for converting an RSA private key to an SSH public key:
 
   $ ./rsakeytool.py rsa -in ~/.ssh/id_rsa -outform sshpublic -comment mycomment >copy_of_id_rsa.pub
+
+Example for converting an RSA private key to a PKCS #1 PEM public key:
+
+  $ ./rsakeytool.py rsa -in ~/.ssh/id_rsa -pubout -out id_rsa.pub.pem -outform pkcs1
+
+Example for converting an RSA private key to a PKCS #8 PEM public key (+O):
+
+  $ ./rsakeytool.py rsa -in ~/.ssh/id_rsa -pubout -out id_rsa.pub.pem
 
 Example usage for key recovery (all fields from 3 fields):
 

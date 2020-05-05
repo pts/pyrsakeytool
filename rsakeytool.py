@@ -15,8 +15,6 @@ This script needs Python 2.4, 2.5, 2.6, 2.7 or 3.x.
 
 See usage on https://github.com/pts/pyrsakeytool
 
-TODO(pts): Add public key output: pkcs1derpublic, pkcs1pempublic, pkcs8derpublic, pkcs8pempublic.
-TODO(pts): Add compatibility with `openssl rsa -pubout'.
 TODO(pts): Add input support for format='gpg'.
 TODO(pts): Add command-line parsing compatible with ssh-keygen.
 TODO(pts): Add output format='gpgascii', 'gpgpublicascii'.
@@ -205,6 +203,10 @@ assert binascii.hexlify(der_oid('1.2.840.113549.1.1.1')) == bb('06092a864886f70d
 
 def der_bytes(value):
   return der_field(4, value)
+
+
+def der_bytes_bit(value):
+  return der_field(3, value)
 
 
 def der_value(value, _bb50=bb('\5\0')):  # Similar to ASN.1 BER and CER.
@@ -1801,9 +1803,13 @@ def is_gpg_userid(comment, _bbemailstart=bb(' <'), _bbemailend=bb('>'), _bbnl=bb
 # --- Serialization and parsing.
 
 
-def serialize_rsa_der(d):
+def serialize_rsa_der(d, is_public):
   # DER and PEM generators (ASN.1): https://0day.work/how-i-recovered-your-private-key-or-why-small-keys-are-bad/
-  return der_value((0, d['modulus'], d['public_exponent'], d['private_exponent'], d['prime1'], d['prime2'], d['exponent1'], d['exponent2'], d['coefficient']))
+  if is_public:
+    # https://stackoverflow.com/a/29707204
+    return der_value((d['modulus'], d['public_exponent']))
+  else:
+    return der_value((0, d['modulus'], d['public_exponent'], d['private_exponent'], d['prime1'], d['prime2'], d['exponent1'], d['exponent2'], d['coefficient']))
 
 
 def parse_rsa_der_numbers(data, i=0, j=None):
@@ -2483,7 +2489,7 @@ def parse_rsa_gpglist(data, i, keyid, _bbnl=bbnl, _bbcr=bb('\r'), _bbe=bbe, _bbc
 
 def convert_rsa_data(d, format='pem', effort=None, keyid=None,
                      _bbe=bbe, _bbd=bb('-'), _bb30=bb('\x30'), _bbsshrsa=bbsshrsa, _bbopensshbin=bbopensshbin, _bbmsblob=bbmsblob, _bbgpg22=bbgpg22, _bbgpg22prot=bbgpg22prot, _bbgpglists=bbgpglists,
-                     _bb00=bb('\0\0')):
+                     _bb00=bb('\0\0'), _bbz=bbz):
   if isinstance(d, bytes):
     data = d
     if data.startswith(_bbsshrsa):
@@ -2555,9 +2561,19 @@ def convert_rsa_data(d, format='pem', effort=None, keyid=None,
       return build_gpg_export_key_data(d, d.get('sub'), is_public=False)
     if format == 'gpgpublic':
       return build_gpg_export_key_data(d, d.get('sub'), is_public=True)
+    if format in ('pkcs1derpublic', 'pkcs1pempublic', 'pkcs8derpublic', 'pkcs8pempublic'):
+      d, data = None, serialize_rsa_der(d, is_public=True)
+      if format.startswith('pkcs8'):
+        data = der_value(((DER_OID_RSA_ENCRYPTION, None), der_bytes_bit(_bbz + data)))
+      if format.endswith('derpublic'):
+        return data
+      elif format.startswith('pkcs8'):
+        return _bbe.join((bb('-----BEGIN PUBLIC KEY-----\n'), base64_encode(data), bb('\n-----END PUBLIC KEY-----\n')))
+      else:
+        return _bbe.join((bb('-----BEGIN RSA PUBLIC KEY-----\n'), base64_encode(data), bb('\n-----END RSA PUBLIC KEY-----\n')))
     if format not in ('der', 'pem', 'der2', 'pem2', 'pcks1der', 'pcks1', 'pkcs1pem', 'pkcs8der', 'pkcs8', 'pkcs8pem'):
-      raise ValueError('Unknown RSA private key format: %r' % (format,))
-    d, data = None, serialize_rsa_der(d)
+      raise ValueError('Unknown RSA key format: %r' % (format,))
+    d, data = None, serialize_rsa_der(d, is_public=False)
   if not (isinstance(data, bytes) and d is None):
     raise TypeError
   if format in ('der', 'pkcs1der'):
@@ -2690,7 +2706,29 @@ def update_format(old_format, format):
 
 
 def is_ascii_format(format):
-  return format in ('openssh', 'sshpublic', 'gpgascii', 'gpgpublicascii', 'gpg23', 'gpglist', 'pem2', 'dict', 'hexa') or format.endswith('pem')
+  return format in ('openssh', 'sshpublic', 'gpgascii', 'gpgpublicascii', 'gpg23', 'gpglist', 'pem2', 'dict', 'hexa', 'pkcs1pempublic', 'pkcs8pempublic') or format.endswith('pem')
+
+
+def get_public_format(format):
+  if format.endswith('public'):
+    return format
+  if format == 'pem':
+    return 'pkcs8pempublic'  # Compatible with OpenSSL 1.1.0l.
+  if format == 'der':
+    return 'pkcs8derpublic'  # Compatible with OpenSSL 1.1.0l.
+  if format.startswith('openssh') or format == 'dropbear':
+    return 'sshpublic'
+  if format == 'gpg':
+    return 'gpgpublic'
+  if format in ('pkcs1der',):
+    return 'pkcs1derpublic'
+  if format in ('pkcs1', 'pkcs1pem'):
+    return 'pkcs1pempublic'
+  if format in ('der2', 'pkcs8der'):
+    return 'pkcs8derpublic'
+  if format in ('pem2', 'pkcs8', 'pkcs8pem'):
+    return 'pkcs8pempublic'
+  return None
 
 
 def main_generate(argv):
@@ -2820,8 +2858,11 @@ def main(argv):
         '-dump: Print the RSA private key as hex number assignments to stdout.\n'
         '-in <input-filename>: Read RSA private key from this file.\n'
         '-out <output-filename>: Write RSA private key to this file, in output format -outform ...\n'
+        '-pubout: Write public key only in format corresponding to -outform ...\n'
         '-outform <output-format>: Any of pem == pkcs1pem (default), pkcs8pem, pcks1der, pkcs8der, '
-        'msblob, dropbear, openssh (also opensshsingle, opensshld, opensshbin), sshpublic, hexa, gpg (output only), gpgpublic (output only), gpg22, gpg23.\n'
+        'msblob, dropbear, openssh (also opensshsingle, opensshld, opensshbin), sshpublic (output only), '
+        'pkcs1derpublic (output only), pkcs1pempublic (output only), pkcs8derpublic (output only), pkcs8pempublic (output only), '
+        'hexa, gpg (output only), gpgpublic (output only), gpg22, gpg23.\n'
         '-inform <input-format>: Ignored. Autodetected instead.\n'
         '-keyid <key-id>: Selects GPG key to read from file. Omit to get a list.\n'
         '-subin <subkey-input-filename>: Read GPG encryption subkey from this file for -outform gpg\n'
@@ -2851,12 +2892,16 @@ def main(argv):
     i += 1
 
   keyid = infn = outfn = subinfn = comment = None
+  is_public = False
   format = 'pem'
   while i < len(argv):
     arg = argv[i]
     i += 1
     if arg == '-dump':
       format = 'dict'
+      continue
+    elif arg == '-pubout':
+      is_public = True
       continue
     if arg not in ('-in', '-subin', '-out', '-outform', '-inform', '-keyid', '-comment'):
       sys.stderr.write('fatal: unknown flag (use --help): %s\n' % arg)
@@ -2889,6 +2934,12 @@ def main(argv):
   if format is None:
     sys.stderr.write('fatal: missing -outform ...\n')
     sys.exit(1)
+  if is_public:
+    format2 = get_public_format(format)
+    if format2 is None:
+      sys.stderr.write('fatal: no public key format for -outform %s\n' % format)
+      sys.exit(1)
+    format = format2
   if outfn is None and not is_ascii_format(format):
     sys.stderr.write('fatal: missing -out ... for non-ASCII -outform %s\n' % format)
     sys.exit(1)
