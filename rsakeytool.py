@@ -2783,7 +2783,7 @@ def convert_rsa_data(d, format='pem', effort=None, keyid=None,
         return _bbe.join((bb('-----BEGIN PUBLIC KEY-----\n'), base64_encode(data), bb('\n-----END PUBLIC KEY-----\n')))
       else:
         return _bbe.join((bb('-----BEGIN RSA PUBLIC KEY-----\n'), base64_encode(data), bb('\n-----END RSA PUBLIC KEY-----\n')))
-    if format not in ('der', 'pem', 'der2', 'pem2', 'pcks1der', 'pcks1', 'pkcs1pem', 'pkcs8der', 'pkcs8', 'pkcs8pem'):
+    if format not in ('der', 'pem', 'der2', 'pem2', 'pkcs1der', 'pkcs1', 'pkcs1pem', 'pkcs8der', 'pkcs8', 'pkcs8pem'):
       raise ValueError('Unknown RSA key format: %r' % (format,))
     d, data = None, serialize_rsa_der(d, is_public=False)
   if not (isinstance(data, bytes) and d is None):
@@ -2915,7 +2915,7 @@ def parse_bitsize(arg):
 
 
 def update_format(old_format, format):
-  if format in ('der', 'pem') and old_format in ('der2', 'pem2', 'pcks8der', 'pcks8pem', 'pcks8'):
+  if format in ('der', 'pem') and old_format in ('der2', 'pem2', 'pkcs8der', 'pkcs8pem', 'pkcs8'):
     # Make `rsakeytool.py genpkey -outform pem' use format='pkcs8pem'.
     return 'pkcs8' + format
   else:
@@ -3158,7 +3158,7 @@ def main(argv):
         '-in <input-filename>: Read RSA private key from this file.\n'
         '-out <output-filename>: Write RSA private key to this file, in output format -outform ...\n'
         '-pubout: Write public key only in format corresponding to -outform ...\n'
-        '-outform <output-format>: Any of pem == pkcs1pem (default), pkcs8pem, pcks1der, pkcs8der, '
+        '-outform <output-format>: Any of pem == pkcs1pem (default), pkcs8pem, pkcs1der, pkcs8der, '
         'msblob, dropbear, openssh (== opensshforce, also opensshsingle, opensshld, opensshbin), sshpublic (output only), sshrsa1, sshrsa1public (output only) '
         'pkcs1derpublic (output only), pkcs1pempublic (output only), pkcs8derpublic (output only), pkcs8pempublic (output only), '
         'hexa, dict (output only), gpg (output only), gpgpublic (output only), gpg22, gpg23.\n'
