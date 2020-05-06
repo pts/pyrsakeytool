@@ -17,12 +17,10 @@ See example usage on https://github.com/pts/pyrsakeytool
 
 TODO(pts): Emulate hex dump in `openssl rsa -in t.pem -text'.
 TODO(pts): Add input support for format='gpg'.
-TODO(pts): Add command-line parsing compatible with ssh-keygen.
 TODO(pts): Add output format='gpgascii', 'gpgpublicascii'.
 TODO(pts): Read 2 private keys from GPG (.lst), write 2 public keys.
 TODO(pts): Add input format='dict', reverse of portable_repr.
 TODO(pts): Do detection and display meaningful errors when reading all *public formats.
-TODO(pts): Add the pkey command with pkcs8 output by default: openssl pkey -in t.pem -pubout -out tp.pem
 """
 
 import binascii
@@ -3201,10 +3199,15 @@ def main(argv):
     argv[1 : 2] = ('-outform', 'pkcs8pem')
     return main_generate(argv)
   i = 1
-  if argv[1] == 'rsa':  # Compatible with `openssl rsa ...'.
-    #sys.stderr.write('fatal: specify rsa as first argument\n')
-    #sys.exit(1)
+  is_pkcs8 = False
+  if argv[1] == 'pkey':  # Compatible with `openssl pkey ...'.
+    is_pkcs8 = True
     i += 1
+  elif argv[1] == 'rsa':  # Compatible with `openssl rsa ...'.
+    i += 1
+  #else:
+  #  sys.stderr.write('fatal: specify rsa as first argument\n')
+  #  sys.exit(1)
 
   keyid = infn = outfn = subinfn = comment = None
   is_public = False
@@ -3246,6 +3249,8 @@ def main(argv):
   if format is None:
     sys.stderr.write('fatal: missing -outform ...\n')
     sys.exit(1)
+  if is_pkcs8 and format in ('pem', 'der'):  # Compatibility with `openssl pkey'.
+    format = 'pkcs8' + format
   if is_public:
     format2 = get_public_format(format)
     if format2 is None:
