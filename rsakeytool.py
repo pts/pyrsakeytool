@@ -261,13 +261,23 @@ def parse_der_bytes_header(data, i):
   return parse_der_header(data, i, xtype=4, stype='bytes')
 
 
-def parse_der_zero(data, i, _bb210=bb('\2\1\0')):
+bbderzero = bb('\2\1\0')
+
+
+def parse_der_zero(data, i, _bbderzero=bbderzero):
   if len(data) < i + 3:
     raise ValueError('EOF in der zero.')
-  if data[i : i + 3] != _bb210:
-    assert 0, [data[:10], data[i : i + 10]]
+  if data[i : i + 3] != _bbderzero:
     raise ValueError('Expected der zero.')
   return i + 3
+
+
+def detect_der_uint_zero(data, i, _bbderzero=bbderzero, _bbt2=bb('\2')):
+  if data[i : i + 1] != _bbt2:
+    return None  # Not an uint.
+  if data[i : i + 3] != _bbderzero:
+    return 1  # Nonzero.
+  return 0  # Zero.
 
 
 def parse_der_uint(data, i, j=None):
@@ -2025,8 +2035,15 @@ def parse_rsa_der_numbers(data, i=0, j=None):
   return d
 
 
-OID_RSA_ENCRYPTION = '1.2.840.113549.1.1.1'  # rsaEncryption.
-DER_OID_RSA_ENCRYPTION = der_oid(OID_RSA_ENCRYPTION)
+DER_ALGORITHM_OIDS = {
+    'rsa': der_oid('1.2.840.113549.1.1.1'),   # rsaEncryption.
+    'dsa': der_oid('1.2.840.10040.4.1'),  # dsaEncryption.
+    'x25519': der_oid('1.3.101.110'),  # b'\x2b\x65\x6e'.
+    'ed25519': der_oid('1.3.101.112'),  # b'\x2b\x65\x70'.
+}
+DER_ALGORITHM_OIDS_REV = dict((_v, _k) for _k, _v in DER_ALGORITHM_OIDS.items())
+
+DER_OID_RSA_ENCRYPTION = DER_ALGORITHM_OIDS['rsa']
 DER2_RSA_SEQUENCE_DATA = DER_OID_RSA_ENCRYPTION + der_value(None)
 
 
@@ -2036,29 +2053,54 @@ def parse_rsa_der_header(data, i=0, _bb30=bb('\x30')):
   i0 = i
   i, size = parse_der_sequence_header(data, i)
   j = i + size
-  i = parse_der_zero(data, i)
-  if data[i : i + 1] == _bb30:  # der2.
-    i, size = parse_der_sequence_header(data, i)
-    if data[i : i + size] != DER2_RSA_SEQUENCE_DATA:
-      raise ValueError('Unsupported der2 sequence.')
-    i += size
-    i, size = parse_der_bytes_header(data, i)
-    if len(data) < i + size:
-      raise ValueError('EOF in der2 bytes.')
-    j = i + size
-    i0 = i
-    i, size = parse_der_sequence_header(data, i)
-    if i > j:
-      raise ValueError('der2 too long.')
+  is_public = False
+  if i >= len(data) or i >= j:
+    raise ValueError('EOF at der sequence start.')
+  if data[i : i + 1] == _bb30:  # pkcs8der == der2 public key.
+    is_public = True
+  else:
+    dz = detect_der_uint_zero(data, i)
+    if dz is None:
+      raise ValueError('Expected uint or sequence at der sequence start.')
+    if dz:  # Nonzero.
+      raise ValueError('Found pkcs1der public key, not parsing public keys.')
     i = parse_der_zero(data, i)
-    if i > j:
-      raise ValueError('der2 too long.')
+  if data[i : i + 1] == _bb30:  # pkcs8der == der2.
+    i, size = parse_der_sequence_header(data, i)
+    if data[i : i + size] == DER2_RSA_SEQUENCE_DATA and not is_public:
+      i += size
+      i, size = parse_der_bytes_header(data, i)
+      if len(data) < i + size:
+        raise ValueError('EOF in pkcs8der bytes.')
+      j = i + size
+      i0 = i
+      i, size = parse_der_sequence_header(data, i)
+      if i > j:
+        raise ValueError('pkcs8der too long.')
+      i = parse_der_zero(data, i)
+      if i > j:
+        raise ValueError('pkcs8der too long.')
+    else:
+      format_values = (size, bb(binascii.hexlify(data[i : i + 22])))
+      if not 4 < size < 22:
+        raise ValueError('Unsupported pkcs8der sequence size: %d %s' % format_values)
+      b_type, b_size = struct.unpack('>BB', data[i : i + 2])
+      if b_type != 6 or b_size != size - 2:
+        raise ValueError('Expected OID in pkcs8der sequence: %d %s' % format_values)
+      if is_public:
+        raise ValueError('Found pkcs8der public key, not parsing public keys.')
+      algorithm = DER_ALGORITHM_OIDS_REV.get(data[i : i + size])
+      if algorithm is None:
+        raise ValueError('Unknown algorithm OID in pkcs8der sequence: %d %s' % format_values)
+      raise ValueError('Unsupported algorithm in pkcs8der sequence: %s' % algorithm)
   return i, j, i0
 
 
 def parse_rsa_pem(data,
                   _bbe=bbe, _bbd=bb('-'), _bbbegin=bb('\n-----BEGIN '), _bbend=bb('\n-----END '), _bbnl=bbnl, _bbcolon=bb(':'),
-                  _bbencrypted=bb('ENCRYPTED '), _bbrsapk=bb('RSA PRIVATE KEY-----\n'), _bbopensshpk=bb('OPENSSH PRIVATE KEY-----\n'), _bbpk=bb('PRIVATE KEY-----\n')):
+                  _bbencrypted=bb('ENCRYPTED '), _bbopensshpk=bb('OPENSSH PRIVATE KEY-----\n'),
+                  _bbrsapk=bb('RSA PRIVATE KEY-----\n'), _bbrsapuk=bb('RSA PUBLIC KEY-----\n'),
+                  _bbpk=bb('PRIVATE KEY-----\n'), _bbpuk=bb('PUBLIC KEY-----\n')):
   # PEM format. Used by both `openssl rsa' (and web servers) and OpenSSH.
   if data.startswith(_bbbegin[1:]):
     i = len(_bbbegin) - 1
@@ -2082,8 +2124,12 @@ def parse_rsa_pem(data,
   is_openssh = False
   if data[i : i + len(_bbrsapk)] == _bbrsapk:
     pass
+  elif data[i : i + len(_bbrsapuk)] == _bbrsapuk:
+    raise ValueError('Found pkcs1pem public key, not parsing public keys.')
   elif data[i : i + len(_bbpk)] == _bbpk:
     pass
+  elif data[i : i + len(_bbpuk)] == _bbpuk:
+    raise ValueError('Found pkcs8pem public key, not parsing public keys.')
   elif data[i : i + len(_bbopensshpk)] == _bbopensshpk:
     is_openssh = True
   elif data[i : i + len(_bbencrypted)] == _bbencrypted:
@@ -2691,7 +2737,7 @@ def parse_rsa_gpglist(data, i, keyid, _bbnl=bbnl, _bbcr=bb('\r'), _bbe=bbe, _bbc
 
 
 def convert_rsa_data(d, format='pem', effort=None, keyid=None,
-                     _bbe=bbe, _bbd=bb('-'), _bb30=bb('\x30'), _bbsshrsa=bbsshrsa, _bbopensshbin=bbopensshbin, _bbmsblob=bbmsblob, _bbgpg22=bbgpg22, _bbgpg22prot=bbgpg22prot, _bbgpglists=bbgpglists,
+                     _bbe=bbe, _bbbegin=bb('-----BEGIN '), _bb30=bb('\x30'), _bbsshrsa=bbsshrsa, _bbopensshbin=bbopensshbin, _bbmsblob=bbmsblob, _bbgpg22=bbgpg22, _bbgpg22prot=bbgpg22prot, _bbgpglists=bbgpglists,
                      _bb19=bb('123456789'), _bbsshrsa1=bbsshrsa1,
                      _bb00=bb('\0\0'), _bbz=bbz):
   if isinstance(d, bytes):
@@ -2721,13 +2767,13 @@ def convert_rsa_data(d, format='pem', effort=None, keyid=None,
     elif data.startswith(_bb00) and data[12 : 12 + len(_bbsshrsa)] == _bbsshrsa:
       d = parse_rsa_opensshld(data)
     elif data[:1] in _bb19 and has_sshrsa1public_header(data):
-      raise ValueError('Found sshrsa1 public key, not parsing it.')
+      raise ValueError('Found sshrsa1 public key, not parsing public keys.')
     elif data.startswith(_bbsshrsa1):
       d = parse_rsa_sshrsa1(data)
     else:
       # TODO(pts): Add support for RSA private keys in GPG `gpg
       # --export-secret-keys', selected by key ID.
-      if data.startswith(_bbd) or data[:1].isspace():  # PEM or hexa format.
+      if data.startswith(_bbbegin) or data[:1].isspace():  # PEM or hexa format.
         data = parse_rsa_pem(data)  # Parses ('pem', 'pem2', 'openssh', 'hexa'-with-whitespace).
       elif data[:1] != _bb30:
         raise ValueError('Unknown RSA private key input format.')
