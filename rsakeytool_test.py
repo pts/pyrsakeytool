@@ -239,6 +239,21 @@ aOZtDXmyy0iC1N1hiZGlo6exssE2Kg==
 -----END PRIVATE KEY-----
 ''')
 
+PKCS8PEMPUBLIC_DATA = bb('''-----BEGIN PUBLIC KEY-----
+MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEAx+XCqqjp6L5VoWJ3qwxg
+1SScCZZXiuHmMmFmTDsI5CzmmveBclXQwrPMZAsxHn12zxo0aDmQUZUEWgQMgZvS
+InMAEwoafr54YJ1pwBcKE2Ks1X4qYFsDWumkkE0yJiEHmxSEZAJpt6EVmXztOh+w
+bn4pitV3Rqc5XZsJiT59Y8SPgCEyzZxTCoCvDSU3Bd+xISra46KWQq7rGMUhA+yL
+WnMeZa8HprFmfjhfkgjH5B7yIIX5r5VbNz7MlrBLILJKn4NewXh7TlRxpFm3rCOj
+6OHujJFQgaHuSlWhPCsHf2xYqn2x5Lrc9nDCT/FMF5FG5XPrmdt3vfOoO86AgYWx
+lJU9XMx4vgPsdmXGurNKf+Rb+zBu+o0eXp3CQD72ah2iyucLcCbFIjeCriglLqwB
+A3FeLkNBuQQNRviGvRmMzYMv3cO5d/pzAVU1kn7XgT9iRTcio+ZOPOx3m9pEfNJF
+XaYI6iJ80138adubztUNnD2Ca8jbJddlemJoCE3YwmfjbMeILfAK5YPeq3BsVYpg
+UJ2/60oJjE30ZsRL2G59KOU0gPLIVbe2aI69Hh0cSuDmFxjxFMiOJ0gz29sFhyHT
+eqQ/8eDTPdFPxEY9hvD+fzL7Q4IEU29n8lz8fYXW61jlEiUz7mnH7aEPlbGlIXoj
+wl71cpK1cdYJGe4gc3yv/wkCAwEAAQ==
+-----END PUBLIC KEY-----
+''')
 
 D_SUB = {  # key_id20: 49354F5DC6B4F10334719ACB1407522D74034ED7
     'modulus': 0xd18278c2c44e8473eceeacc3f423118b88d7d11e1a083a7de7cc5303b71b77822b7c1b337be22094534569a9e0f6e0fbc2a2246b05b89884522b759f1fb500e5183ff766b943825168e5f5c8d86e322d74b939cbbd13f4abc98d61d4c535b217c345d7336618baf13eadaae3fb25d7cf87cac4b47d7fe522bed3158204ed6add,
@@ -564,6 +579,7 @@ class RsakeytoolTest(unittest.TestCase):
     assert convert_rsa_data(d, 'pkcs1pempublic') == PKCS1PEMPUBLIC_DATA
     assert convert_rsa_data(d, 'pem2') == PEM2_DATA
     assert convert_rsa_data(PEM2_DATA, 'dict') == d
+    assert convert_rsa_data(d, 'pkcs8pempublic') == PKCS8PEMPUBLIC_DATA
 
   def test_build_gpg_export_key_data(self):
     d = {  # key_id20: A2D68183CB4D58902218916F901BF337B182BAE5
