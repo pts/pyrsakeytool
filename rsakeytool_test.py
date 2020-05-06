@@ -170,6 +170,21 @@ N8YHgtHo55M83fGHbml9RMk/weEAZWjmbQ15sstIgtTdYYmRpaOnsbLBNio=
 -----END RSA PRIVATE KEY-----
 ''')
 
+PKCS1PEMPUBLIC_DATA = bb('''-----BEGIN RSA PUBLIC KEY-----
+MIICCgKCAgEAx+XCqqjp6L5VoWJ3qwxg1SScCZZXiuHmMmFmTDsI5CzmmveBclXQ
+wrPMZAsxHn12zxo0aDmQUZUEWgQMgZvSInMAEwoafr54YJ1pwBcKE2Ks1X4qYFsD
+WumkkE0yJiEHmxSEZAJpt6EVmXztOh+wbn4pitV3Rqc5XZsJiT59Y8SPgCEyzZxT
+CoCvDSU3Bd+xISra46KWQq7rGMUhA+yLWnMeZa8HprFmfjhfkgjH5B7yIIX5r5Vb
+Nz7MlrBLILJKn4NewXh7TlRxpFm3rCOj6OHujJFQgaHuSlWhPCsHf2xYqn2x5Lrc
+9nDCT/FMF5FG5XPrmdt3vfOoO86AgYWxlJU9XMx4vgPsdmXGurNKf+Rb+zBu+o0e
+Xp3CQD72ah2iyucLcCbFIjeCriglLqwBA3FeLkNBuQQNRviGvRmMzYMv3cO5d/pz
+AVU1kn7XgT9iRTcio+ZOPOx3m9pEfNJFXaYI6iJ80138adubztUNnD2Ca8jbJddl
+emJoCE3YwmfjbMeILfAK5YPeq3BsVYpgUJ2/60oJjE30ZsRL2G59KOU0gPLIVbe2
+aI69Hh0cSuDmFxjxFMiOJ0gz29sFhyHTeqQ/8eDTPdFPxEY9hvD+fzL7Q4IEU29n
+8lz8fYXW61jlEiUz7mnH7aEPlbGlIXojwl71cpK1cdYJGe4gc3yv/wkCAwEAAQ==
+-----END RSA PUBLIC KEY-----
+''')
+
 PEM2_DATA = bb('''-----BEGIN PRIVATE KEY-----
 MIIJQgIBADANBgkqhkiG9w0BAQEFAASCCSwwggkoAgEAAoICAQDH5cKqqOnovlWh
 YnerDGDVJJwJlleK4eYyYWZMOwjkLOaa94FyVdDCs8xkCzEefXbPGjRoOZBRlQRa
@@ -546,6 +561,7 @@ class RsakeytoolTest(unittest.TestCase):
     assert convert_rsa_data(d, 'pkcs8derpublic') == PKCS8DERPUBLIC_DATA
     assert convert_rsa_data(d, 'pem') == PEM_DATA
     assert convert_rsa_data(PEM_DATA, 'dict') == d
+    assert convert_rsa_data(d, 'pkcs1pempublic') == PKCS1PEMPUBLIC_DATA
     assert convert_rsa_data(d, 'pem2') == PEM2_DATA
     assert convert_rsa_data(PEM2_DATA, 'dict') == d
 
