@@ -211,6 +211,14 @@ class RsakeytoolTest(unittest.TestCase):
     self.assertEqual(bb(r'''[([[{'answer': 0x2a}]],)]'''), f([([[{'answer': 42}]],)]))
     self.assertEqual(bb(r'''{'': {}, 'nn': b'\r\x0b\x08\\"\'', 'o': b"'"}'''), f({'': {}, 'nn': bb('\r\v\b\\\"\''), 'o': bb("'")}))
 
+  def test_uint_from_be(self):
+    f = rsakeytool.uint_from_be
+    self.assertEqual(0, f(bb('')))
+    self.assertEqual(0, f(bb('\0')))
+    self.assertEqual(1, f(bb('\1')))
+    self.assertEqual(258, f(bb('\1\2')))
+    self.assertEqual(0xdeadbe3f, f(binascii.unhexlify(bb('deadbe3f'))))
+
   def test_uint_to_any_be(self):
     f = rsakeytool.uint_to_any_be
     a = 0x7f0123456789abcdef
