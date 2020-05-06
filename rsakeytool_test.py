@@ -502,6 +502,15 @@ class RsakeytoolTest(unittest.TestCase):
     finally:
       rsakeytool.get_random_uint_in_range = orig_gruir
 
+  def test_has_sshrsa1public_header(self):
+    f = rsakeytool.has_sshrsa1public_header
+    self.assertEqual(False, f(bb('')))
+    self.assertEqual(False, f(bb('0 42 43 \n')))
+    self.assertEqual(True, f(bb('1 4')))
+    self.assertEqual(True, f(bb('10987 4')))
+    self.assertEqual(False, f(bb('10987 0')))
+    self.assertEqual(False, f(bb('109876 4')))  # First number too long.
+
   def test_convert(self):
     d = get_test_rsa_key()
     assert rsakeytool.is_rsa_private_key_complete(d)

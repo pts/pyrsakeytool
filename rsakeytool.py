@@ -2317,9 +2317,8 @@ def has_sshrsa1public_header(data, i=0, _bb19=bb('123456789')):
     i += 1
   if not data[i : i + 1].isspace():
     return False
-  if not (j > i and data[i : i + 1] in _bb19):
-    return False
-  return True
+  i += 1
+  return j > i and data[i : i + 1] in _bb19
 
 
 def parse_rsa_sshrsa1(data, i=0, _bbsshrsa1=bbsshrsa1):
