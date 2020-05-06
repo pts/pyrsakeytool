@@ -2034,8 +2034,14 @@ def parse_rsa_der_numbers(data, i=0, j=None):
   i, d['private_exponent'] = parse_der_uint(data, i, j)
   if i < j:
     i, d['prime1'] = parse_der_uint(data, i, j)
-    # Stop parsing here, we can calculate the rest.
-    # !! TODO(pts): Parse it all, for speed. Do it everywhere.
+    if i < j:
+      i, d['prime2'] = parse_der_uint(data, i, j)
+      if i < j:
+        i, d['exponent1'] = parse_der_uint(data, i, j)
+        if i < j:
+          i, d['exponent2'] = parse_der_uint(data, i, j)
+          if i < j:
+            i, d['coefficient'] = parse_der_uint(data, i, j)
   return d
 
 
@@ -2181,8 +2187,9 @@ def parse_rsa_ssh_numbers(data, i=0, j=None, format='dropbear'):
     d['modulus'], d['public_exponent'] = d['public_exponent'], d['modulus']
     i, d['private_exponent'] = parse_be32size_uint(data, i, j)
     i, d['prime1'] = parse_be32size_uint(data, i, j)
-    # prime2 is the last number in the file, but we don't need it.
-    # i, d['prime2'] = parse_be32size_uint(data, i, j)
+    if i < j:
+      # prime2 is the last number in the file, but we don't need it.
+      i, d['prime2'] = parse_be32size_uint(data, i, j)
   return d
 
 
@@ -2361,11 +2368,12 @@ def parse_rsa_sshrsa1(data, i=0, _bbsshrsa1=bbsshrsa1):
   i, d['private_exponent'] = parse_gpg_mpi(data, i)
   if i < j:
     i, d['coefficient'] = parse_gpg_mpi(data, i)
-    i, d['prime2'] = parse_gpg_mpi(data, i)
     if i < j:
-      i, d['prime1'] = parse_gpg_mpi(data, i)
-      d['exponent1'] = d['private_exponent'] % (d['prime1'] - 1)
-      d['exponent2'] = d['private_exponent'] % (d['prime2'] - 1)
+      i, d['prime2'] = parse_gpg_mpi(data, i)
+      if i < j:
+        i, d['prime1'] = parse_gpg_mpi(data, i)
+        d['exponent1'] = d['private_exponent'] % (d['prime1'] - 1)
+        d['exponent2'] = d['private_exponent'] % (d['prime2'] - 1)
   return d
 
 
@@ -2392,6 +2400,29 @@ def serialize_rsa_msblob(d, _bbe=bbe, _bbz=bbz, _bbmsblob=bbmsblob):
       le_padded(d['exponent1'], hsize), le_padded(d['exponent2'], hsize),
       le_padded(d['coefficient'], hsize),
       le_padded(d['private_exponent'], size)))
+
+
+def parse_rsa_msblob_numbers(data, i=0, j=None):
+  if j is None:
+    j = len(data)
+  i, bit_size = parse_msblob_uint(data, i, j, 4)
+  size = (bit_size + 7) >> 3
+  hsize = (bit_size + 15) >> 4
+  d = {}
+  i, d['public_exponent'] = parse_msblob_uint(data, i, j, 4)
+  i, d['modulus'] = parse_msblob_uint(data, i, j, size)
+  i, d['prime1'] = parse_msblob_uint(data, i, j, hsize)
+  if i < j:
+    i, d['prime2'] = parse_msblob_uint(data, i, j, hsize)
+    if i < j:
+      i, d['exponent1'] = parse_msblob_uint(data, i, j, hsize)
+      if i < j:
+        i, d['exponent2'] = parse_msblob_uint(data, i, j, hsize)
+        if i < j:
+          i, d['coefficient'] = parse_msblob_uint(data, i, j, hsize)
+          if i < j:
+            i, d['private_exponent'] = parse_msblob_uint(data, i, j, size)
+  return d
 
 
 HEXA_KEYS = ('modulus', 'public_exponent', 'private_exponent', 'prime1', 'prime2', 'exponent1', 'exponent2', 'coefficient', 'comment', 'checkint', 'creation_time')
@@ -2470,25 +2501,6 @@ def serialize_rsa_hexa(d, _bbassign=bb(' = '), _bbnl=bbnl, _bbe=bbe, _bbpx=bb('%
     append_portable_repr(output, value)
     output.append(_bbnl)
   return _bbe.join(output)
-
-
-def parse_rsa_msblob_numbers(data, i=0, j=None):
-  if j is None:
-    j = len(data)
-  i, bit_size = parse_msblob_uint(data, i, j, 4)
-  size = (bit_size + 7) >> 3
-  hsize = (bit_size + 15) >> 4
-  d = {}
-  i, d['public_exponent'] = parse_msblob_uint(data, i, j, 4)
-  i, d['modulus'] = parse_msblob_uint(data, i, j, size)
-  i, d['prime1'] = parse_msblob_uint(data, i, j, hsize)
-  i += hsize << 2  # We don't need these.
-  if j >= i + size and len(data) >= i + size:  # For speedup.
-    i, d['private_exponent'] = parse_msblob_uint(data, i, j, size)
-    r, q = divmod(d['modulus'], d['prime1'] or 1)
-    if not (q == 0 and r > 1 and d['prime1'] > 1 and d['public_exponent'] * d['private_exponent'] % ((d['prime1'] - 1) * (r - 1)) == 1):
-      del d['private_exponent']  # Corrupted, don't use it.
-  return d
 
 
 GPG_RSA_KEYS_AA = 'nedpqu'
