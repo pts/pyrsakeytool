@@ -2738,6 +2738,7 @@ def parse_rsa_gpglist(data, i, keyid, _bbnl=bbnl, _bbcr=bb('\r'), _bbe=bbe, _bbc
 
 def convert_rsa_data(d, format='pem', effort=None, keyid=None,
                      _bbe=bbe, _bbbegin=bb('-----BEGIN '), _bb30=bb('\x30'), _bbsshrsa=bbsshrsa, _bbopensshbin=bbopensshbin, _bbmsblob=bbmsblob, _bbgpg22=bbgpg22, _bbgpg22prot=bbgpg22prot, _bbgpglists=bbgpglists,
+                     _bbsshd=bb('ssh-'), _bbecdsad=bb('ecdsa-'), _bbsksshd=bb('sk-ssh-'), _bbskecdsa=bb('sk-ecdsa-'),
                      _bb19=bb('123456789'), _bbsshrsa1=bbsshrsa1,
                      _bb00=bb('\0\0'), _bbz=bbz):
   if isinstance(d, bytes):
@@ -2768,6 +2769,8 @@ def convert_rsa_data(d, format='pem', effort=None, keyid=None,
       d = parse_rsa_opensshld(data)
     elif data[:1] in _bb19 and has_sshrsa1public_header(data):
       raise ValueError('Found sshrsa1 public key, not parsing public keys.')
+    elif data.startswith(_bbsshd) or data.startswith(_bbecdsad) or data.startswith(_bbsksshd) or data.startswith(_bbskecdsa):
+      raise ValueError('Found ssh (openssh or dropbear) public key, not parsing public keys.')
     elif data.startswith(_bbsshrsa1):
       d = parse_rsa_sshrsa1(data)
     else:
