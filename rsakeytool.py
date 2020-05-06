@@ -2733,7 +2733,7 @@ def convert_rsa_data(d, format='pem', effort=None, keyid=None,
       return serialize_rsa_opensshld(d)
     if format == 'opensshbin':
       return serialize_rsa_opensshbin(d)
-    if format in ('sshrsa1', 'rsa1'):  # Make `ssh-keygen -t rsa1' work.
+    if format == 'sshrsa1':
       return serialize_rsa_sshrsa1(d)
     if format == 'sshrsa1public':
       return serialize_rsa_sshrsa1public(d)
@@ -2913,8 +2913,6 @@ def get_public_format(format):
     return 'sshpublic'
   if format in ('sshrsa1', 'gpg', 'pkcs1der'):
     return format + 'public'
-  if format == 'rsa1':
-    return 'sshrsa1public'
   if format in ('pkcs1', 'pkcs1pem'):
     return 'pkcs1pempublic'
   if format in ('der2', 'pkcs8der'):
@@ -3039,7 +3037,7 @@ def main_generate(argv):
 
 
 def convert_from_ssh_keygen_argv(argv, i):
-  # !! TODO(pts): Also generate public key: .pub.
+  # !! TODO(pts): Also generate public key file, in the same format: .pub.
   # !! TODO(pts): chmod to unwritable.
   # !! TODO(pts): generate user@host as default comment.
   # !! TODO(pts): Dump sshrsa1 public keys in sshrsa1public format. Does ssh-keygen do this?
@@ -3056,7 +3054,9 @@ def convert_from_ssh_keygen_argv(argv, i):
       break
     if arg == '-t' and i < len(argv):
       arg2 = argv[i].lower()
-      if arg != 'rsa':  # Also 'rsa' is the ssh-keygen default.
+      if arg2 == 'rsa1':
+        format = 'sshrsa1'
+      elif arg2 != 'rsa':  # Also 'rsa' is the ssh-keygen default.
         sys.stderr.write('fatal: unknown algorithm: -t %s\n' % argv[i])
         sys.exit(1)
       i += 1
@@ -3105,6 +3105,9 @@ def convert_from_ssh_keygen_argv(argv, i):
   elif bitsize is not None:
     if format is None:
       format = 'openssh'
+    # Minimum bitsize for `ssh-keygen -t rsa1' is 768 bytes. We don't enforce this, but warn.
+    if bitsize < 768:
+      sys.stderr.write('warning: bitsize smaller than 768 may not be compatible with ssh tools: -b %d\n' % bitsize)
     argv2.extend(('genrsa', '-outform', format, '-out', filename, '-comment', comment, str(bitsize)))
   elif format is not None:
     # Convert to format, write to stdout.
@@ -3132,7 +3135,7 @@ def main(argv):
         '-out <output-filename>: Write RSA private key to this file, in output format -outform ...\n'
         '-pubout: Write public key only in format corresponding to -outform ...\n'
         '-outform <output-format>: Any of pem == pkcs1pem (default), pkcs8pem, pcks1der, pkcs8der, '
-        'msblob, dropbear, openssh (== opensshforce, also opensshsingle, opensshld, opensshbin), sshpublic (output only), sshrsa1 (== rsa1), sshrsa1public (output only) '
+        'msblob, dropbear, openssh (== opensshforce, also opensshsingle, opensshld, opensshbin), sshpublic (output only), sshrsa1, sshrsa1public (output only) '
         'pkcs1derpublic (output only), pkcs1pempublic (output only), pkcs8derpublic (output only), pkcs8pempublic (output only), '
         'hexa, dict (output only), gpg (output only), gpgpublic (output only), gpg22, gpg23.\n'
         '-inform <input-format>: Ignored. Autodetected instead.\n'
