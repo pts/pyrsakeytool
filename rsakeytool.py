@@ -22,6 +22,7 @@ TODO(pts): Add output format='gpgascii', 'gpgpublicascii'.
 TODO(pts): Read 2 private keys from GPG (.lst), write 2 public keys.
 TODO(pts): Add input format='dict', reverse of portable_repr.
 TODO(pts): Do detection and display meaningful errors when reading all *public formats.
+TODO(pts): Add the pkey command with pkcs8 output by default: openssl pkey -in t.pem -pubout -out tp.pem
 """
 
 import binascii
@@ -1407,6 +1408,31 @@ def get_random_prime(bitsize, is_low=False, limit=None, _sp=SIEVE_PRIMES):
 
 def generate_rsa(bitsize, e=None, is_close_odd=False):
   """Generates a random RSA private key and returns it in dict (d) format.
+
+  The implmenetation is very similar to OpenSSL 1.1.0l, OpenSSL
+  1.0.2u (used by OpenSSH 7.4p1):
+
+  * Number of bits and top two high bits of p and q are determined in the
+    same way (with the default is_close_odd=False).
+  * Number of Miller-Rabin rounds is the same (except for bitsize < 82).
+  * Default e value is the same: 0x10001 (except for bitsize < 17).
+  * Loop strategy with random + sieve + Miller-Rabin is the same.
+
+  Notable differences:
+
+  * This implementation supports smaller bitsizes (bitsize >= 4). This has
+    only theoretical and educational interest, because you want bitsize >=
+    4096 for high security.
+  * This implementation is not resistant against side-channel attack such as
+    timing attacks.
+  * This implementation guarantees termination (relevant for bitsize <=
+    17) by reducing the random prime range when failing to find primes on
+    the boundary.
+  * This implementation is almost the same as Dropbear 2019.78, but the
+    number of Miller-Rabin rounds is different: Dropbear has 8, this
+    implementation has it depending on bitsize.
+  * The prime generation algorithm very different from PyCrypto 2.6.1.
+    PyCrypto is much slower.
 
   Args:
     bitsize: Number of bits in result['modulus']. Must be at least 4.
