@@ -13,8 +13,9 @@ exec python -- ${1+"$@"}; exit 1  # Just for the error message.
 
 This script needs Python 2.4, 2.5, 2.6, 2.7 or 3.x.
 
-See usage on https://github.com/pts/pyrsakeytool
+See example usage on https://github.com/pts/pyrsakeytool
 
+TODO(pts): Emulate hex dump in `openssl rsa -in t.pem -text'.
 TODO(pts): Add input support for format='gpg'.
 TODO(pts): Add command-line parsing compatible with ssh-keygen.
 TODO(pts): Add output format='gpgascii', 'gpgpublicascii'.
