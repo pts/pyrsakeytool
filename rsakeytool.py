@@ -20,7 +20,7 @@ TODO(pts): Add command-line parsing compatible with ssh-keygen.
 TODO(pts): Add output format='gpgascii', 'gpgpublicascii'.
 TODO(pts): Read 2 private keys from GPG (.lst), write 2 public keys.
 TODO(pts): Add input format='dict', reverse of portable_repr.
-TODO(pts): Add format='sshrsa1' and format='sshrsa1public' (ssh-keygen -t rsa1).
+TODO(pts): Do detection and display meaningful errors when reading all *public formats.
 """
 
 import binascii
@@ -421,6 +421,67 @@ def parse_gpg23_uint(data, i, j, _bbhash=bb('#')):
   if value is None:
     raise ValueError('Bad gpg23 uint value.')
   return i + 1, value
+
+
+# --- GPG 1.x and 2.x binary packet format.
+
+
+def append_gpg_mpi(output, value):
+  """Returns a GPG MPI representation of uint value."""
+  if not isinstance(value, integer_types):
+    raise ValueError
+  if value < 0:
+    raise TypeError('Negative GPG MPI.')
+  output.append(struct.pack('>H', get_uint_bitsize(value)))
+  output.append(uint_to_any_be(value))
+
+
+def skip_gpg_mpis(data, i, mpi_count):
+  while mpi_count > 0:
+    mpi_count -= 1
+    # https://tools.ietf.org/html/draft-ietf-openpgp-rfc4880bis-09#section-3.2
+    if i + 2 > len(data):
+      raise ValueError('GPG MPI too short.')
+    bitsize, = struct.unpack('>H', data[i : i + 2])
+    i += 2
+    size = (bitsize + 7) >> 3
+    if i + size > len(data):
+      raise ValueError('GPG MPI data too short.')
+    i += size
+  return i
+
+
+def parse_gpg_mpi(data, i):
+  # https://tools.ietf.org/html/draft-ietf-openpgp-rfc4880bis-09#section-3.2
+  if i + 2 > len(data):
+    raise ValueError('GPG MPI too short.')
+  bitsize, = struct.unpack('>H', data[i : i + 2])
+  i += 2
+  #if not bitsize:  # Let's be permissive.
+  #  raise ValueError('Empty GPG MPI.')
+  i1 = i + ((bitsize + 7) >> 3)
+  if i1 > len(data):
+    raise ValueError('GPG MPI data too short.')
+  value = uint_from_be(data[i : i1])
+  if value >> bitsize:
+    raise ValueError('GPG MPI has unused high bits set.')
+  return i1, value
+
+
+def skip_gpg_key_pstrings(data, i, pstring_count):
+  while pstring_count > 0:
+    # https://tools.ietf.org/html/draft-ietf-openpgp-rfc4880bis-09#section-5.6.6
+    pstring_count -= 1
+    if i >= len(data):
+      raise ValueError('GPG key pstring too short.')
+    size, = struct.unpack('>B', data[i : i + 1])
+    i += 1
+    if size == 0 or size == 0xff:
+      raise ValueError('Bad GPG key pstring size: 0x%x' % size)
+    if i + size > len(data):
+      raise ValueError('GPG key pstring too short.')
+    i += size
+  return i
 
 
 # --- repr (Python literal expression) format tools.
@@ -1677,16 +1738,6 @@ def build_gpg_signature_digest(hash_name, public_key_packet_data, second_packet_
   return asn1_header + hd, hd[:2]
 
 
-def append_gpg_mpi(output, value):
-  """Returns a GPG MPI representation of uint value."""
-  if not isinstance(value, integer_types):
-    raise ValueError
-  if value < 0:
-    raise TypeError('Negative GPG MPI.')
-  output.append(struct.pack('>H', get_uint_bitsize(value)))
-  output.append(uint_to_any_be(value))
-
-
 def build_gpg_rsa_public_key_packet_data(d, creation_time=None, _bbe=bbe, _bbz=bbz):
   """Returns the packet bytes without the tag and size header."""
   if not isinstance(d.get('creation_time'), integer_types):
@@ -1847,39 +1898,6 @@ def build_gpg_packet_header(packet_type, size, _pack=struct.pack):
     return _pack('>BBL', 192 | packet_type, 255, size)
 
 
-def skip_gpg_mpis(data, i, mpi_count):
-  while mpi_count > 0:
-    mpi_count -= 1
-    # https://tools.ietf.org/html/draft-ietf-openpgp-rfc4880bis-09#section-3.2
-    if i + 2 > len(data):
-      raise ValueError('GPG MPI too short.')
-    bitsize, = struct.unpack('>H', data[i : i + 2])
-    i += 2
-    #if not bitsize:  # Let's be permissive.
-    #  raise ValueError('Empty GPG MPI.')
-    size = (bitsize + 7) >> 3
-    if i + size > len(data):
-      raise ValueError('GPG MPI data too short.')
-    i += size
-  return i
-
-
-def skip_gpg_key_pstrings(data, i, pstring_count):
-  while pstring_count > 0:
-    # https://tools.ietf.org/html/draft-ietf-openpgp-rfc4880bis-09#section-5.6.6
-    pstring_count -= 1
-    if i >= len(data):
-      raise ValueError('GPG key pstring too short.')
-    size, = struct.unpack('>B', data[i : i + 1])
-    i += 1
-    if size == 0 or size == 0xff:
-      raise ValueError('Bad GPG key pstring size: 0x%x' % size)
-    if i + size > len(data):
-      raise ValueError('GPG key pstring too short.')
-    i += size
-  return i
-
-
 def get_gpg_public_key_packet_size(data, i=0):
   """Input is private key packet data or public key packet data."""
   if i + 6 > len(data):
@@ -1978,6 +1996,7 @@ def parse_rsa_der_numbers(data, i=0, j=None):
   if i < j:
     i, d['prime1'] = parse_der_uint(data, i, j)
     # Stop parsing here, we can calculate the rest.
+    # !! TODO(pts): Parse it all, for speed. Do it everywhere.
   return d
 
 
@@ -2189,6 +2208,91 @@ def serialize_rsa_openssh(d, _bbopensshbegin=bbopensshbegin, _bbopensshend=bbope
 def serialize_rsa_sshpublic(d, _bbe=bbe, _bbsshrsa=bbsshrsa, _bbsshrsasp=bb('ssh-rsa '), _bbnl=bbnl, _bbsp=bb(' '), _bbrr=bb('\r')):
   data = _bbe.join((_bbsshrsa, be32size_value(d['public_exponent']), be32size_value(d['modulus'])))
   return _bbe.join((_bbsshrsasp, binascii.b2a_base64(data).rstrip(_bbnl), _bbsp, d.get('comment', _bbe).replace(_bbnl, _bbsp).replace(_bbrr, _bbsp), _bbnl))
+
+
+def serialize_rsa_sshrsa1public(d, _bbe=bbe, _bbnl=bbnl):
+  # rsa_ssh1_loadpub(...) in https://fossies.org/linux/misc/putty-0.73.tar.gz/putty-0.73/sshpubk.c?m=t
+  # Output of `ssh-keygen -t rsa1'.
+  return _bbe.join((bb('%d %d %d ' % (get_uint_bitsize(d['modulus']), d['public_exponent'], d['modulus'])), d.get('comment', _bbe), _bbnl))
+
+
+bbsshrsa1 = bb('SSH PRIVATE KEY FILE FORMAT 1.1\n\0')
+
+
+def serialize_rsa_sshrsa1(d, _bbsshrsa1=bbsshrsa1, _bbz=bbz, _bbe=bbe, _bbz4=bb('\0\0\0\0')):
+  # rsa_ssh1_load_main(...) in https://fossies.org/linux/misc/putty-0.73.tar.gz/putty-0.73/sshpubk.c?m=t
+  output = [_bbsshrsa1, _bbz,_bbz4, struct.pack('>L', get_uint_bitsize(d['modulus']))]
+  append_gpg_mpi(output, d['modulus'])
+  append_gpg_mpi(output, d['public_exponent'])
+  comment = d.get('comment', _bbe)
+  output.append(struct.pack('>L', len(comment)))
+  output.append(comment)
+  checkint = d.get('checkint', 0xdfc2) & 0xffff  # Any random value.
+  output.append(struct.pack('>HH', checkint, checkint))
+  append_gpg_mpi(output, d['private_exponent'])
+  append_gpg_mpi(output, d['coefficient'])
+  append_gpg_mpi(output, d['prime2'])
+  append_gpg_mpi(output, d['prime1'])
+  output.append(_bbz4)
+  return _bbe.join(output)
+
+
+def has_sshrsa1public_header(data, i=0, _bb19=bb('123456789')):
+  j = len(data)
+  if not (j > i and data[i : i + 1] in _bb19):
+    return False
+  i0, i = i, i + 1
+  while i - i0 < 5 and data[i : i + 1].isdigit():  # At most 5 digits.
+    i += 1
+  if not data[i : i + 1].isspace():
+    return False
+  if not (j > i and data[i : i + 1] in _bb19):
+    return False
+  return True
+
+
+def parse_rsa_sshrsa1(data, i=0, _bbsshrsa1=bbsshrsa1):
+  if data[i : i + len(_bbsshrsa1)] != _bbsshrsa1:
+    raise ValueError('sshrsa1 signature not found.')
+  i += len(_bbsshrsa1)
+  # rsa_ssh1_load_main(...) in https://fossies.org/linux/misc/putty-0.73.tar.gz/putty-0.73/sshpubk.c?m=t
+  j = len(data)
+  if i + 11 > j:
+    raise ValueError('EOF in sshrsa1 bitsize.')
+  cipher_type, reserved, bitsize, bitsize2 = struct.unpack('>BLLH', data[i : i + 11])
+  i += 9  # Don't skip over bitsize2.
+  if cipher_type != 0:
+    raise ValueError('Encrypted (passphrase-protected) ssh1rsa key not supported.')
+  if reserved:
+    raise ValueError('Bad sshrsa1 reserved.')
+  if not 4 <= bitsize <= 65535:
+    raise ValueError('Bad sshrsa1 bitsize: %d' % bitsize)
+  if bitsize != bitsize2:
+    raise ValueError('sshrsa1 bitsize mismatch.')
+  d = {}
+  i, d['modulus'] = parse_gpg_mpi(data, i)
+  if get_uint_bitsize(d['modulus']) != bitsize:
+    raise ValueError('Mismatch in modulus vs bitsize.')
+  i, d['public_exponent'] = parse_gpg_mpi(data, i)
+  i, comment = parse_be32size_bytes(data, i, j)
+  if comment:
+    d['comment'] = comment
+  if i + 4> j:
+    raise ValueError('EOF in sshrsa1 checkint.')
+  checkint, checkint2 = struct.unpack('>HH', data[i : i + 4])
+  i += 4
+  if checkint != checkint2:
+    raise ValueError('Mismatch in checkints.')
+  d['checkint'] = checkint
+  i, d['private_exponent'] = parse_gpg_mpi(data, i)
+  if i < j:
+    i, d['coefficient'] = parse_gpg_mpi(data, i)
+    i, d['prime2'] = parse_gpg_mpi(data, i)
+    if i < j:
+      i, d['prime1'] = parse_gpg_mpi(data, i)
+      d['exponent1'] = d['private_exponent'] % (d['prime1'] - 1)
+      d['exponent2'] = d['private_exponent'] % (d['prime2'] - 1)
+  return d
 
 
 bbmsblob = struct.pack('<LL4s', 0x207, 0xa400, bb('RSA2'))
@@ -2563,6 +2667,7 @@ def parse_rsa_gpglist(data, i, keyid, _bbnl=bbnl, _bbcr=bb('\r'), _bbe=bbe, _bbc
 
 def convert_rsa_data(d, format='pem', effort=None, keyid=None,
                      _bbe=bbe, _bbd=bb('-'), _bb30=bb('\x30'), _bbsshrsa=bbsshrsa, _bbopensshbin=bbopensshbin, _bbmsblob=bbmsblob, _bbgpg22=bbgpg22, _bbgpg22prot=bbgpg22prot, _bbgpglists=bbgpglists,
+                     _bb19=bb('123456789'), _bbsshrsa1=bbsshrsa1,
                      _bb00=bb('\0\0'), _bbz=bbz):
   if isinstance(d, bytes):
     data = d
@@ -2590,6 +2695,10 @@ def convert_rsa_data(d, format='pem', effort=None, keyid=None,
       d = parse_rsa_gpglist(data, 0, keyid)
     elif data.startswith(_bb00) and data[12 : 12 + len(_bbsshrsa)] == _bbsshrsa:
       d = parse_rsa_opensshld(data)
+    elif data[:1] in _bb19 and has_sshrsa1public_header(data):
+      raise ValueError('Found sshrsa1 public key, not parsing it.')
+    elif data.startswith(_bbsshrsa1):
+      d = parse_rsa_sshrsa1(data)
     else:
       # TODO(pts): Add support for RSA private keys in GPG `gpg
       # --export-secret-keys', selected by key ID.
@@ -2623,6 +2732,10 @@ def convert_rsa_data(d, format='pem', effort=None, keyid=None,
       return serialize_rsa_opensshld(d)
     if format == 'opensshbin':
       return serialize_rsa_opensshbin(d)
+    if format in ('sshrsa1', 'rsa1'):  # Make `ssh-keygen -t rsa1' work.
+      return serialize_rsa_sshrsa1(d)
+    if format == 'sshrsa1public':
+      return serialize_rsa_sshrsa1public(d)
     if format == 'msblob':
       return serialize_rsa_msblob(d)
     if format == 'hexa':
@@ -2785,7 +2898,7 @@ def update_format(old_format, format):
 
 
 def is_ascii_format(format):
-  return format in ('openssh', 'opensshforce', 'sshpublic', 'gpgascii', 'gpgpublicascii', 'gpg23', 'gpglist', 'pem2', 'dict', 'hexa', 'pkcs1pempublic', 'pkcs8pempublic') or format.endswith('pem')
+  return format in ('openssh', 'opensshforce', 'sshpublic', 'sshrsa1public', 'gpgascii', 'gpgpublicascii', 'gpg23', 'gpglist', 'pem2', 'dict', 'hexa', 'pkcs1pempublic', 'pkcs8pempublic') or format.endswith('pem')
 
 
 def get_public_format(format):
@@ -2797,10 +2910,10 @@ def get_public_format(format):
     return 'pkcs8derpublic'  # Compatible with OpenSSL 1.1.0l.
   if format.startswith('openssh') or format == 'dropbear':
     return 'sshpublic'
-  if format == 'gpg':
-    return 'gpgpublic'
-  if format in ('pkcs1der',):
-    return 'pkcs1derpublic'
+  if format in ('sshrsa1', 'gpg', 'pkcs1der'):
+    return format + 'public'
+  if format == 'rsa1':
+    return 'sshrsa1public'
   if format in ('pkcs1', 'pkcs1pem'):
     return 'pkcs1pempublic'
   if format in ('der2', 'pkcs8der'):
@@ -2928,6 +3041,7 @@ def convert_from_ssh_keygen_argv(argv, i):
   # !! TODO(pts): Also generate public key: .pub.
   # !! TODO(pts): chmod to unwritable.
   # !! TODO(pts): generate user@host as default comment.
+  # !! TODO(pts): Dump sshrsa1 public keys in sshrsa1public format. Does ssh-keygen do this?
   is_public = False
   format = None
   bitsize = filename = comment = None
@@ -3017,7 +3131,7 @@ def main(argv):
         '-out <output-filename>: Write RSA private key to this file, in output format -outform ...\n'
         '-pubout: Write public key only in format corresponding to -outform ...\n'
         '-outform <output-format>: Any of pem == pkcs1pem (default), pkcs8pem, pcks1der, pkcs8der, '
-        'msblob, dropbear, openssh (== opensshforce, also opensshsingle, opensshld, opensshbin), sshpublic (output only), '
+        'msblob, dropbear, openssh (== opensshforce, also opensshsingle, opensshld, opensshbin), sshpublic (output only), sshrsa1 (== rsa1), sshrsa1public (output only) '
         'pkcs1derpublic (output only), pkcs1pempublic (output only), pkcs8derpublic (output only), pkcs8pempublic (output only), '
         'hexa, dict (output only), gpg (output only), gpgpublic (output only), gpg22, gpg23.\n'
         '-inform <input-format>: Ignored. Autodetected instead.\n'
