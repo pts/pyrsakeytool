@@ -209,8 +209,12 @@ def der_bytes(value):
   return der_field(4, value)
 
 
-def der_bytes_bit(value):
-  return der_field(3, value)
+def der_bytes_bit(value, _bbz=bbz):
+  # By using bb('\1') ... bb('\7') instead of _bbz below, we could encode
+  # bit string values whose size isn't a multiple of 8 bits. For example,
+  # try decoding 030301ff06 in https://lapo.it/asn1js/ : it will decode
+  # to 15 bits: 0xff06 >> 1 == 0b11111111000011.
+  return der_field(3, _bbz + value)
 
 
 def der_value(value, _bb50=bb('\5\0')):  # Similar to ASN.1 BER and CER.
@@ -2824,7 +2828,7 @@ def convert_rsa_data(d, format='pem', effort=None, keyid=None,
     if format in ('pkcs1derpublic', 'pkcs1pempublic', 'pkcs8derpublic', 'pkcs8pempublic'):
       d, data = None, serialize_rsa_der(d, is_public=True)
       if format.startswith('pkcs8'):
-        data = der_value(((DER_OID_RSA_ENCRYPTION, None), der_bytes_bit(_bbz + data)))
+        data = der_value(((DER_OID_RSA_ENCRYPTION, None), der_bytes_bit(data)))
       if format.endswith('derpublic'):
         return data
       elif format.startswith('pkcs8'):
