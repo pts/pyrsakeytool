@@ -700,39 +700,55 @@ def gcd(a, b):
   return a
 
 
-def recover_rsa_prime1_from_exponents(modulus, private_exponent, public_exponent):
-  """Efficiently recover non-trivial factors of n.
+def recover_rsa_prime1_from_exponents(modulus, public_exponent, private_exponent):
+  """Efficiently recovers a non-trivial factor of modulus.
 
-  From https://gist.github.com/flavienbwk/54671449419e1576c2708c9a3a711d78
+  Based on https://gist.github.com/flavienbwk/54671449419e1576c2708c9a3a711d78
 
   Typically Takes less than 10 seconds.
 
-  See: Handbook of Applied Cryptography
-  8.2.2 Security of RSA -> (i) Relation to factoring (p.287)
-  http://www.cacr.math.uwaterloo.ca/hac/
+  See: Handbook of Applied Cryptography 8.2.2 Security of RSA -> (i) Relation to
+  factoring (p.287), http://www.cacr.math.uwaterloo.ca/hac/
+
+  Uses random numbers to find the divisor.
+
+  Args:
+    modulus: A product of 2 different odd primes: p and q.
+    public_exponent: An integer, coprime with (p - 1) * (q - 1).
+    private_exponent: An integer, coprime with (p - 1) * (q - 1),
+        equals to modinv(public_exponent, (p - 1) * (q - 1)).
+  Returns:
+    The largest prime divisor of modulus, i.e. max(p, q), i.e. prime1.
   """
-  import random
-  t = (public_exponent * private_exponent - 1)
-  s = 0
-  while 1:
-    quotient, remainder = divmod(t, 2)
-    if remainder != 0:
-      break
-    s += 1
-    t = quotient
-  is_found = False
+  if modulus < 15:
+    raise ValueError('Modulus is too small.')
+  if not (modulus & 1):
+    raise ValueError('modulus must be odd.')
   modulus1 = modulus - 1
-  while not is_found:
-    i = 1
-    a = random.randint(1, modulus1)
-    while i <= s and not is_found:
-      c1 = pow(a, pow(2, i - 1, modulus) * t, modulus)
-      c2 = pow(a, pow(2, i, modulus) * t, modulus)
-      is_found = c1 != 1 and c1 != modulus1 and c2 == 1
-      i += 1
-  p = gcd(c1 - 1, modulus)
-  q = modulus // p
-  return max(p, q)
+  if not 1 < public_exponent < modulus1:
+    raise ValueError('Mismatch in public_exponent vs modulus.')
+  if not (public_exponent & 1):
+    raise ValueError('public_exponent must be odd.')
+  if not 1 < private_exponent < modulus1:
+    raise ValueError('Mismatch in private_exponent vs modulus.')
+  if not (private_exponent & 1):
+    raise ValueError('private_exponent must be odd.')
+  modulus3 = modulus - 3
+  t = public_exponent * private_exponent - 1
+  k0 = 1  # Depends on that t is even.
+  while not (t & (1 << k0)):
+    k0 += 1
+  t >>= k0
+  while 1:
+    k, a = k0, get_random_uint_in_range(0, modulus3)
+    c1i1 = pow(a, t, modulus)  # This is the slowest part.
+    while k > 0:
+      c1i = c1i1 * c1i1 % modulus
+      if c1i1 != 1 and c1i1 != modulus1 and c1i == 1:
+        p = gcd(c1i1 - 1, modulus)
+        return max(p, modulus // p)
+      c1i1 = c1i
+      k -= 1
 
 
 def get_rsa_private_key(**kwargs):
@@ -766,14 +782,14 @@ def get_rsa_private_key(**kwargs):
         raise ValueError('Bad private_exponent.')
       if public_exponent <= 0:
         raise ValueError('Bad public_exponent.')
-      if modulus <  2 * 3:
-        raise ValueError('Bad modulus.')
+      if modulus <  3 * 5:
+        raise ValueError('modulus to small.')
       if private_exponent >= modulus:
         raise ValueError('Mismatch in private_exponent vs exponents.')
       if public_exponent >= modulus:
         raise ValueError('Mismatch in public_exponent vs exponents.')
       # Takes a few (10 seconds).
-      prime1, prime2 = recover_rsa_prime1_from_exponents(modulus, private_exponent, public_exponent), 0
+      prime1, prime2 = recover_rsa_prime1_from_exponents(modulus, public_exponent, private_exponent), 0
     else:
       # FYI It's also possible to recover the primes from other fields.
       # From (public_exponent, modulus, exponent1):
@@ -790,11 +806,11 @@ def get_rsa_private_key(**kwargs):
   elif not prime1:
     prime1 = modulus // prime2
     if prime1 < 2:
-      raise ValueError('modulus too small.')
+      raise ValueError('modulus is too small.')
   elif not prime2:
     prime2 = modulus // prime1
     if prime2 < 2:
-      raise ValueError('modulus too small.')
+      raise ValueError('modulus is too small.')
   mc = bool(prime1) + bool(prime2) + bool(modulus)
   if mc < 3:
     raise ValueError('Found %d in modulus, prime1, prime2.' % mc)
@@ -825,9 +841,9 @@ def get_rsa_private_key(**kwargs):
   if ec < 1:
     raise ValueError('Needed at least 1 of private_exponent, public_exponent.')
   if public_exponent and not 1 < public_exponent < pp1:
-    raise ValueError('Bad public_exponent.')
+    raise ValueError('Mismatch in public_exponent vs pp1.')
   if private_exponent and not 1 < private_exponent < pp1:
-    raise ValueError('Bad private_exponent.')
+    raise ValueError('Mismatch in private_exponent vs pp1.')
   if not private_exponent:
     # lcm instead of pp1 would also work, but produce different value.
     private_exponent = modinv(public_exponent, pp1)
@@ -1315,7 +1331,7 @@ def get_random_prime(bitsize, is_low=False, limit=None, _sp=SIEVE_PRIMES):
     A prime number of size bitsize, smaller than limit.
   """
   if bitsize < 3:
-    raise ValueError('bitsize too small: %d' % bitsize)
+    raise ValueError('bitsize is too small: %d' % bitsize)
   b23 = 3 - bool(is_low)
   # Set top 2 bits (p * q to be large enough in RSA). Also make it odd.
   start1 = b23 << (bitsize - 3)
@@ -1462,7 +1478,7 @@ def generate_rsa(bitsize, e=None, is_close_odd=False):
     An RSA private key dict (same as of get_rsa_private_key).
   """
   if bitsize < 4:
-    raise ValueError('bitsize too small: %d' % bitsize)
+    raise ValueError('bitsize is too small: %d' % bitsize)
   if e is None:
     if bitsize >= 17:
       e, ep = 0x10001, True
@@ -2929,7 +2945,7 @@ def quick_test():
   sys.stdout.flush()
 
   # Takes a few (10) seconds, depends on random.
-  #assert prime1 == recover_rsa_prime1_from_exponents(modulus, private_exponent, public_exponent)
+  #assert prime1 == recover_rsa_prime1_from_exponents(modulus, public_exponent, private_exponent)
 
   print('OK2')
   sys.stdout.flush()

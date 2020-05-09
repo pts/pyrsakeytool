@@ -502,6 +502,26 @@ class RsakeytoolTest(unittest.TestCase):
     finally:
       rsakeytool.get_random_uint_in_range = orig_gruir
 
+  def test_recover_rsa_prime1_from_exponents(self):
+    f = rsakeytool.recover_rsa_prime1_from_exponents
+    orig_gruir = rsakeytool.get_random_uint_in_range
+    gruir_next_ary = [0]
+    def gruir(start, limit):
+      result0 = gruir_next_ary[0]
+      gruir_next_ary[0] = result0 + 1
+      assert start <= result0 < limit
+      return result0
+    def check(expected_prime1, *args, **kwargs):
+      gruir_next_ary[0] = 0
+      self.assertEqual(expected_prime1, f(*args, **kwargs))
+
+    rsakeytool.get_random_uint_in_range = gruir
+    try:
+      check(17, 221, 5, 177)
+      self.assertEqual(19, gruir_next_ary[0])
+    finally:
+      rsakeytool.get_random_uint_in_range = orig_gruir
+
   def test_has_sshrsa1public_header(self):
     f = rsakeytool.has_sshrsa1public_header
     self.assertEqual(False, f(bb('')))
