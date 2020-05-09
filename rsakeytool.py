@@ -3128,7 +3128,7 @@ def convert_from_ssh_keygen_argv(argv, i):
   # !! TODO(pts): Also generate public key file, in the same format: .pub.
   # !! TODO(pts): chmod to unwritable.
   # !! TODO(pts): generate user@host as default comment.
-  # !! TODO(pts): Dump sshrsa1 public keys in sshrsa1public format. Does ssh-keygen do this?
+  # !! TODO(pts): Dump sshrsa1 public keys in sshrsa1public format. ssh-keygen does this.
   is_public = False
   format = None
   bitsize = filename = comment = None
