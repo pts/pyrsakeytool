@@ -973,9 +973,10 @@ def get_random_uint_in_range(start, limit):
     if d <= 0:
       raise ValueError('Empty range.')
     return start
+  bitsize = get_uint_bitsize(d - 1)
+  size = (bitsize + 7) >> 3
   while 1:
-    bitsize = get_uint_bitsize(d - 1)
-    value = uint_from_be(get_random_bytes((bitsize + 7) >> 3))
+    value = uint_from_be(get_random_bytes(size))
     if bitsize & 7:
       value &= (1 << bitsize) - 1
     if value < d:
