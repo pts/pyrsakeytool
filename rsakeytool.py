@@ -21,7 +21,7 @@ TODO(pts): Add output format='gpgascii', 'gpgpublicascii'.
 TODO(pts): Read 2 private keys from GPG (.lst), write 2 public keys.
 TODO(pts): Add input format='dict', reverse of portable_repr.
 TODO(pts): Do detection and display meaningful errors when reading all *public formats.
-TODO(pts): Read and write format='ppk' (PuTTY private key v2, test.ppk) (v1 wasn't supported by any PuTTY release)
+TODO(pts): Read and write format='ppk' (PuTTY private key v2, test.ppk) (v1 wasn't supported by any PuTTY release). Existing Python implementation: https://pypi.org/project/puttykeys/#files
 TODO(pts): Read and write format='ssh2' (test.ssh2_private).
 TODO(pts): Read and write format='ssh2_public' (test.ssh2_public) 
 TODO(pts): Show useful error message for passphrase-protected SSH2 private key (test.ssh2_private_protected).
