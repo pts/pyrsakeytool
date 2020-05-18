@@ -2293,13 +2293,6 @@ def serialize_rsa_opensshbin(d, _bbopensshbin=bbopensshbin, _bbsshrsa=bbsshrsa, 
   return _bbe.join((_bbopensshbin, _bbnonestr, _bbnonestr, _bbemptystr, _bbonekey, struct.pack('>L', len(public_key_data)), public_key_data, private_key_data))
 
 
-def serialize_rsa_opensshbin(d, _bbopensshbin=bbopensshbin, _bbsshrsa=bbsshrsa, _bbe=bbe, _bbnonestr=bb('\0\0\0\4none'), _bbemptystr=bb('\0\0\0\0'), _bbonekey=bb('\0\0\0\1')):
-  # https://github.com/openssh/openssh-portable/blob/20819b962dc1467cd6fad5486a7020c850efdbee/PROTOCOL.key#L10-L19
-  public_key_data = _bbe.join((_bbsshrsa, be32size_value(d['public_exponent']), be32size_value(d['modulus'])))
-  private_key_data = serialize_rsa_opensshld(d)
-  return _bbe.join((_bbopensshbin, _bbnonestr, _bbnonestr, _bbemptystr, _bbonekey, struct.pack('>L', len(public_key_data)), public_key_data, private_key_data))
-
-
 bbopensshbegin = bb('-----BEGIN OPENSSH PRIVATE KEY-----\n')
 bbopensshend = bb('\n-----END OPENSSH PRIVATE KEY-----\n')
 
